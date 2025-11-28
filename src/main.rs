@@ -1,16 +1,17 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
-use git2::Repository;
 use notify::{Config, RecursiveMode, Watcher};
-use serde::Deserialize;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::channel;
 use std::time::Duration;
 use walkdir::WalkDir;
+
+mod config;
+use config::CxConfig;
+mod deps;
 
 #[derive(Parser)]
 #[command(name = "cx")]
@@ -35,32 +36,6 @@ enum Commands {
     },
     Watch,
     Clean,
-}
-
-#[derive(Deserialize, Debug)]
-struct CxConfig {
-    package: PackageConfig,
-    dependencies: Option<HashMap<String, String>>,
-    build: Option<BuildConfig>,
-}
-
-#[derive(Deserialize, Debug)]
-struct PackageConfig {
-    name: String,
-    #[allow(dead_code)]
-    version: String,
-    #[serde(default = "default_edition")]
-    edition: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct BuildConfig {
-    cflags: Option<Vec<String>>,
-    libs: Option<Vec<String>>,
-}
-
-fn default_edition() -> String {
-    "c++20".to_string()
 }
 
 fn main() -> Result<()> {
@@ -133,41 +108,6 @@ fn clean_project() -> Result<()> {
     Ok(())
 }
 
-fn fetch_dependencies(deps: &HashMap<String, String>) -> Result<Vec<String>> {
-    let home_dir = dirs::home_dir().context("Could not find home directory")?;
-    let cache_dir = home_dir.join(".cx").join("cache");
-    fs::create_dir_all(&cache_dir)?;
-
-    let mut include_paths = Vec::new();
-
-    println!("{} Checking dependencies...", "📦".blue());
-
-    for (name, url) in deps {
-        let lib_path = cache_dir.join(name);
-
-        if !lib_path.exists() {
-            println!("   {} Downloading {} (Global Cache)...", "⬇".cyan(), name);
-            println!("     URL: {}", url);
-
-            match Repository::clone(url, &lib_path) {
-                Ok(_) => println!("     Done."),
-                Err(e) => {
-                    println!("{} Failed to download {}: {}", "x".red(), name, e);
-                    continue;
-                }
-            }
-        } else {
-            println!("   {} Using cached: {}", "⚡".green(), name);
-        }
-
-        include_paths.push(format!("-I{}", lib_path.display()));
-        include_paths.push(format!("-I{}/include", lib_path.display()));
-        include_paths.push(format!("-I{}/src", lib_path.display()));
-    }
-
-    Ok(include_paths)
-}
-
 fn run_project(release: bool, run_args: &[String]) -> Result<()> {
     if !Path::new("cx.toml").exists() {
         println!("{} Error: cx.toml not found.", "x".red());
@@ -187,7 +127,7 @@ fn run_project(release: bool, run_args: &[String]) -> Result<()> {
     let mut include_flags = Vec::new();
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
-            include_flags = fetch_dependencies(deps)?;
+            include_flags = deps::fetch_dependencies(deps)?;
         }
     }
 
