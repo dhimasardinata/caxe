@@ -22,6 +22,8 @@ enum Commands {
         name: String,
         #[arg(long, default_value = "cpp")]
         lang: String,
+        #[arg(long, default_value = "console")]
+        template: String,
     },
     Run {
         #[arg(long)]
@@ -30,6 +32,9 @@ enum Commands {
         args: Vec<String>,
     },
     Add {
+        lib: String,
+    },
+    Remove {
         lib: String,
     },
     Watch,
@@ -41,16 +46,21 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::New { name, lang } => create_project(name, lang),
+        Commands::New {
+            name,
+            lang,
+            template,
+        } => create_project(name, lang, template),
         Commands::Run { release, args } => builder::build_and_run(*release, args),
         Commands::Watch => builder::watch(),
         Commands::Clean => builder::clean(),
         Commands::Test => builder::run_tests(),
         Commands::Add { lib } => deps::add_dependency(lib),
+        Commands::Remove { lib } => deps::remove_dependency(lib),
     }
 }
 
-fn create_project(name: &str, lang: &str) -> Result<()> {
+fn create_project(name: &str, lang: &str, template: &str) -> Result<()> {
     let path = Path::new(name);
     if path.exists() {
         println!("{} Error: Directory '{}' already exists", "x".red(), name);
@@ -59,46 +69,112 @@ fn create_project(name: &str, lang: &str) -> Result<()> {
 
     fs::create_dir_all(path.join("src")).context("Failed to create src")?;
 
-    let example_dep = if lang == "cpp" {
-        "\n[dependencies]\n# json = \"https://github.com/nlohmann/json.git\""
-    } else {
-        ""
-    };
+    let (toml_content, main_code) = match template {
+        "raylib" => (
+            format!(
+                r#"[package]
+name = "{}"
+version = "0.1.0"
+edition = "c++17"
 
-    let config_content = format!(
-        r#"[package]
+[build]
+libs = ["raylib", "gdi32", "user32", "shell32", "winmm", "opengl32"]
+
+[dependencies]
+raylib = "https://github.com/raysan5/raylib.git"
+"#,
+                name
+            ),
+            r#"#include "raylib.h"
+
+int main() {
+    InitWindow(800, 600, "cx + raylib");
+    SetTargetFPS(60);
+
+    while (!WindowShouldClose()) {
+        BeginDrawing();
+        ClearBackground(RAYWHITE);
+        DrawText("Hello Raylib from cx!", 190, 200, 20, LIGHTGRAY);
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}
+"#,
+        ),
+
+        "web" => (
+            format!(
+                r#"[package]
+name = "{}"
+version = "0.1.0"
+edition = "c++17"
+
+[build]
+cflags = ["-D_WIN32_WINNT=0x0A00"]
+libs = ["ws2_32"]
+
+[dependencies]
+httplib = "https://github.com/yhirose/cpp-httplib.git"
+"#,
+                name
+            ),
+            r#"#include <iostream>
+#include "httplib.h"
+
+int main() {
+    httplib::Server svr;
+    svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
+        res.set_content("<h1>Hello from cx template!</h1>", "text/html");
+    });
+    std::cout << "Server at http://localhost:8080" << std::endl;
+    svr.listen("0.0.0.0", 8080);
+    return 0;
+}
+"#,
+        ),
+
+        _ => {
+            let dep = if lang == "cpp" {
+                "\n[dependencies]\n# json = \"...\""
+            } else {
+                ""
+            };
+            let cfg = format!(
+                r#"[package]
 name = "{}"
 version = "0.1.0"
 edition = "{}"
 {}
 "#,
-        name,
-        if lang == "c" { "c17" } else { "c++20" },
-        example_dep
-    );
+                name,
+                if lang == "c" { "c17" } else { "c++20" },
+                dep
+            );
 
-    fs::write(path.join("cx.toml"), config_content)?;
-
-    let (filename, code) = if lang == "c" {
-        (
-            "main.c",
-            "#include <stdio.h>\n\nint main() {\n    printf(\"Hello cx!\\n\");\n    return 0;\n}\n",
-        )
-    } else {
-        (
-            "main.cpp",
-            "#include <iostream>\n\nint main() {\n    std::cout << \"Hello cx!\" << std::endl;\n    return 0;\n}\n",
-        )
+            let code = if lang == "c" {
+                "#include <stdio.h>\nint main() { printf(\"Hello cx!\\n\"); return 0; }"
+            } else {
+                "#include <iostream>\nint main() { std::cout << \"Hello cx!\" << std::endl; return 0; }"
+            };
+            (cfg, code)
+        }
     };
 
-    fs::write(path.join("src").join(filename), code)?;
+    fs::write(path.join("cx.toml"), toml_content)?;
+
+    let ext = if lang == "c" { "c" } else { "cpp" };
+    fs::write(path.join("src").join(format!("main.{}", ext)), main_code)?;
+
     fs::write(path.join(".gitignore"), "/build\n")?;
 
     println!(
-        "{} Created new {} project: {}",
+        "{} Created new project: {} (template: {})",
         "✓".green(),
-        lang.cyan(),
-        name.bold()
+        name.bold(),
+        template.cyan()
     );
+    println!("  cd {}\n  cx run", name);
     Ok(())
 }

@@ -105,3 +105,34 @@ pub fn add_dependency(lib_input: &str) -> Result<()> {
 
     Ok(())
 }
+
+pub fn remove_dependency(name: &str) -> Result<()> {
+    if !Path::new("cx.toml").exists() {
+        println!("{} Error: cx.toml not found.", "x".red());
+        return Ok(());
+    }
+
+    let config_str = fs::read_to_string("cx.toml")?;
+    let mut config: crate::config::CxConfig = toml::from_str(&config_str)?;
+
+    let mut found = false;
+    if let Some(deps) = &mut config.dependencies {
+        if deps.remove(name).is_some() {
+            found = true;
+        }
+    }
+
+    if found {
+        let new_toml = toml::to_string_pretty(&config)?;
+        fs::write("cx.toml", new_toml)?;
+        println!("{} Removed dependency: {}", "🗑️".red(), name.bold());
+    } else {
+        println!(
+            "{} Dependency '{}' not found in cx.toml",
+            "!".yellow(),
+            name
+        );
+    }
+
+    Ok(())
+}
