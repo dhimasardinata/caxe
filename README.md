@@ -7,9 +7,10 @@
 ## ✨ Features
 
 - **⚡ Zero Config Start**: Create a Hello World C++ project in seconds.
-- **📦 Smart Dependency Management**: define dependencies in `cx.toml`. `cx` automatically downloads libraries from Git and handles linking.
-- **💾 Global Caching**: Libraries are downloaded once and shared across all projects (saves disk space & bandwidth).
-- **👁️ Watch Mode**: Automatically recompiles and runs your project when you save a file (`cx watch`).
+- **📦 Smart Dependency Management**: Define dependencies in `cx.toml`. `cx` automatically downloads libraries from Git and handles linking.
+- **💾 Global Caching**: Libraries are downloaded once and shared across all projects.
+- **👁️ Watch Mode**: Automatically recompiles and runs your project when you save a file.
+- **🧪 Built-in Testing**: Run unit tests easily without configuring external frameworks.
 - **🚀 Incremental Builds**: Only recompiles changed files.
 - **🛠️ Custom Configuration**: Support for C++17/20, custom compiler flags, and system linking.
 
@@ -49,6 +50,30 @@ Coding without manually recompiling every time.
 
 ```bash
 cx watch
+```
+
+### 4. Unit Testing 🧪
+
+No need for complex test runners like GoogleTest or Catch2 for simple projects.
+
+1. Create a `tests/` directory in your project root.
+2. Add `.cpp` files (e.g., `tests/test_math.cpp`).
+3. Use standard `assert` or return `0` for success.
+
+```cpp
+#include <cassert>
+
+int main() {
+    int x = 10;
+    assert(x + 5 == 15); // If this fails, the test fails
+    return 0;
+}
+```
+
+Run the tests:
+
+```bash
+cx test
 ```
 
 ## ⚙️ Configuration (`cx.toml`)
