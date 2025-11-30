@@ -25,6 +25,10 @@ enum Commands {
         #[arg(long, default_value = "console")]
         template: String,
     },
+    Build {
+        #[arg(long)]
+        release: bool,
+    },
     Run {
         #[arg(long)]
         release: bool,
@@ -51,6 +55,7 @@ fn main() -> Result<()> {
             lang,
             template,
         } => create_project(name, lang, template),
+        Commands::Build { release } => builder::build_project(*release).map(|_| ()),
         Commands::Run { release, args } => builder::build_and_run(*release, args),
         Commands::Watch => builder::watch(),
         Commands::Clean => builder::clean(),

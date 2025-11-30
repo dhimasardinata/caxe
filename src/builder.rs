@@ -7,34 +7,18 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
-pub fn clean() -> Result<()> {
-    if Path::new("build").exists() {
-        fs::remove_dir_all("build").context("Failed to remove build directory")?;
-        println!("{} Build directory cleaned", "✓".green());
-    } else {
-        println!("{} Nothing to clean", "!".yellow());
-    }
-    Ok(())
-}
+pub fn build_project(release: bool) -> Result<bool> {
+    let start_time = Instant::now();
 
-pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
     if !Path::new("cx.toml").exists() {
         println!("{} Error: cx.toml not found.", "x".red());
-        return Ok(());
+        return Ok(false);
     }
-
     let config_str = fs::read_to_string("cx.toml")?;
     let config: CxConfig = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
-
-    println!(
-        "{} Project: {} ({})",
-        "🚀".blue(),
-        config.package.name.bold(),
-        config.package.edition
-    );
 
     let mut include_flags = Vec::new();
     if let Some(deps) = &config.dependencies {
@@ -87,13 +71,13 @@ pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
 
     if source_files.is_empty() {
         println!("{} No source files found.", "!".yellow());
-        return Ok(());
+        return Ok(false);
     }
 
-    let compiler = if has_cpp { "clang++" } else { "clang" };
-
     if needs_recompile {
+        let compiler = if has_cpp { "clang++" } else { "clang" };
         fs::create_dir_all("build")?;
+
         let mut cmd = Command::new(compiler);
         cmd.args(&source_files);
         cmd.arg("-o").arg(output_bin);
@@ -114,11 +98,9 @@ pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
                 }
             }
         }
-
         for flag in &include_flags {
             cmd.arg(flag);
         }
-
         if let Some(build_cfg) = &config.build {
             if let Some(libs) = &build_cfg.libs {
                 for lib in libs {
@@ -133,23 +115,41 @@ pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
                 if !out.status.success() {
                     println!("{}", String::from_utf8_lossy(&out.stderr));
                     println!("{} Build failed", "x".red());
-                    return Ok(());
+                    return Ok(false);
                 }
             }
             Err(_) => {
                 println!("{} Compiler '{}' not found.", "x".red(), compiler);
-                return Ok(());
+                return Ok(false);
             }
         }
-        println!("{} Build finished", "✓".green());
+
+        let duration = start_time.elapsed();
+        println!("{} Build finished in {:.2?}", "✓".green(), duration);
     } else {
         println!("{} Up to date", "⚡".green());
     }
 
+    Ok(true)
+}
+
+pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
+    let success = build_project(release)?;
+
+    if !success {
+        return Ok(());
+    }
+
+    let output_bin = if cfg!(target_os = "windows") {
+        "build/main.exe"
+    } else {
+        "build/main"
+    };
     println!("{} Running...\n", "▶".green());
-    let run_path = format!("./{}", output_bin);
-    let mut run_cmd = Command::new(&run_path);
+
+    let mut run_cmd = Command::new(format!("./{}", output_bin));
     run_cmd.args(run_args);
+
     let _ = run_cmd.status();
 
     Ok(())
@@ -179,6 +179,16 @@ fn run_and_clear() {
     if let Err(e) = build_and_run(false, &[]) {
         println!("{} Error: {}", "x".red(), e);
     }
+}
+
+pub fn clean() -> Result<()> {
+    if Path::new("build").exists() {
+        fs::remove_dir_all("build").context("Failed to remove build directory")?;
+        println!("{} Build directory cleaned", "✓".green());
+    } else {
+        println!("{} Nothing to clean", "!".yellow());
+    }
+    Ok(())
 }
 
 pub fn run_tests() -> Result<()> {
