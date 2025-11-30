@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
+use inquire::{Select, Text};
 use std::fs;
 use std::path::Path;
 
@@ -19,7 +20,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     New {
-        name: String,
+        name: Option<String>,
         #[arg(long, default_value = "cpp")]
         lang: String,
         #[arg(long, default_value = "console")]
@@ -65,8 +66,30 @@ fn main() -> Result<()> {
     }
 }
 
-fn create_project(name: &str, lang: &str, template: &str) -> Result<()> {
-    let path = Path::new(name);
+// src/main.rs (Ganti fungsi create_project yang lama dengan ini)
+
+fn create_project(name_opt: &Option<String>, lang_cli: &str, templ_cli: &str) -> Result<()> {
+    let name = match name_opt {
+        Some(n) => n.clone(),
+        None => Text::new("What is your project name?")
+            .with_default("my-app")
+            .prompt()?,
+    };
+    let template = if name_opt.is_none() {
+        let options = vec!["console", "web", "raylib"];
+        Select::new("Select a template:", options).prompt()?
+    } else {
+        templ_cli
+    };
+
+    let lang = if name_opt.is_none() {
+        let options = vec!["cpp", "c"];
+        Select::new("Select language:", options).prompt()?
+    } else {
+        lang_cli
+    };
+
+    let path = Path::new(&name);
     if path.exists() {
         println!("{} Error: Directory '{}' already exists", "x".red(), name);
         return Ok(());
@@ -91,24 +114,20 @@ raylib = "https://github.com/raysan5/raylib.git"
                 name
             ),
             r#"#include "raylib.h"
-
 int main() {
     InitWindow(800, 600, "cx + raylib");
     SetTargetFPS(60);
-
     while (!WindowShouldClose()) {
         BeginDrawing();
         ClearBackground(RAYWHITE);
-        DrawText("Hello Raylib from cx!", 190, 200, 20, LIGHTGRAY);
+        DrawText("Hello Raylib!", 190, 200, 20, LIGHTGRAY);
         EndDrawing();
     }
-
     CloseWindow();
     return 0;
 }
 "#,
         ),
-
         "web" => (
             format!(
                 r#"[package]
@@ -127,7 +146,6 @@ httplib = "https://github.com/yhirose/cpp-httplib.git"
             ),
             r#"#include <iostream>
 #include "httplib.h"
-
 int main() {
     httplib::Server svr;
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
@@ -139,7 +157,6 @@ int main() {
 }
 "#,
         ),
-
         _ => {
             let dep = if lang == "cpp" {
                 "\n[dependencies]\n# json = \"...\""
@@ -168,10 +185,8 @@ edition = "{}"
     };
 
     fs::write(path.join("cx.toml"), toml_content)?;
-
     let ext = if lang == "c" { "c" } else { "cpp" };
     fs::write(path.join("src").join(format!("main.{}", ext)), main_code)?;
-
     fs::write(path.join(".gitignore"), "/build\n")?;
 
     println!(
