@@ -31,6 +31,7 @@ enum Commands {
     },
     Watch,
     Clean,
+    Test,
 }
 
 fn main() -> Result<()> {
@@ -41,6 +42,7 @@ fn main() -> Result<()> {
         Commands::Run { release, args } => builder::build_and_run(*release, args),
         Commands::Watch => builder::watch(),
         Commands::Clean => builder::clean(),
+        Commands::Test => builder::run_tests(),
     }
 }
 

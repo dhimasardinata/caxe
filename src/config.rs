@@ -1,14 +1,14 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct CxConfig {
     pub package: PackageConfig,
     pub dependencies: Option<HashMap<String, String>>,
     pub build: Option<BuildConfig>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct PackageConfig {
     pub name: String,
     #[allow(dead_code)]
@@ -17,7 +17,7 @@ pub struct PackageConfig {
     pub edition: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct BuildConfig {
     pub cflags: Option<Vec<String>>,
     pub libs: Option<Vec<String>>,

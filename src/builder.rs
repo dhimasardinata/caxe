@@ -180,3 +180,107 @@ fn run_and_clear() {
         println!("{} Error: {}", "x".red(), e);
     }
 }
+
+pub fn run_tests() -> Result<()> {
+    let test_dir = Path::new("tests");
+    if !test_dir.exists() {
+        println!("{} No tests/ directory found.", "!".yellow());
+        return Ok(());
+    }
+
+    let config_str = fs::read_to_string("cx.toml").unwrap_or_default();
+    let config: CxConfig = toml::from_str(&config_str).unwrap_or_else(|_| CxConfig {
+        package: crate::config::PackageConfig {
+            name: "test_runner".into(),
+            version: "0.0.0".into(),
+            edition: "c++20".into(),
+        },
+        ..Default::default()
+    });
+
+    let mut include_flags = Vec::new();
+    if let Some(deps) = &config.dependencies {
+        if !deps.is_empty() {
+            include_flags = deps::fetch_dependencies(deps)?;
+        }
+    }
+
+    println!("{} Running tests...", "🧪".magenta());
+    fs::create_dir_all("build/tests")?;
+
+    let mut total_tests = 0;
+    let mut passed_tests = 0;
+
+    for entry in WalkDir::new("tests").into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path
+            .extension()
+            .map_or(false, |ext| ext == "cpp" || ext == "cc")
+        {
+            total_tests += 1;
+            let test_name = path.file_stem().unwrap().to_string_lossy();
+            let output_bin = format!("build/tests/{}", test_name);
+
+            print!("   TEST {} ... ", test_name.bold());
+
+            let compiler = "clang++";
+            let mut cmd = Command::new(compiler);
+            cmd.arg(path);
+            cmd.arg("-o").arg(&output_bin);
+            cmd.arg(format!("-std={}", config.package.edition));
+
+            if let Some(build_cfg) = &config.build {
+                if let Some(flags) = &build_cfg.cflags {
+                    for flag in flags {
+                        cmd.arg(flag);
+                    }
+                }
+            }
+
+            for flag in &include_flags {
+                cmd.arg(flag);
+            }
+
+            if let Some(build_cfg) = &config.build {
+                if let Some(libs) = &build_cfg.libs {
+                    for lib in libs {
+                        cmd.arg(format!("-l{}", lib));
+                    }
+                }
+            }
+
+            let output = cmd.output();
+            if output.is_err() || !output.as_ref().unwrap().status.success() {
+                println!("{}", "COMPILE FAIL".red());
+                if let Ok(out) = output {
+                    println!("{}", String::from_utf8_lossy(&out.stderr));
+                }
+                continue;
+            }
+
+            let run_path = format!("./{}", output_bin);
+            let run_status = Command::new(&run_path).status();
+
+            match run_status {
+                Ok(status) => {
+                    if status.success() {
+                        println!("{}", "PASS".green());
+                        passed_tests += 1;
+                    } else {
+                        println!("{}", "FAIL".red());
+                    }
+                }
+                Err(_) => println!("{}", "EXEC FAIL".red()),
+            }
+        }
+    }
+
+    println!("\nTest Result: {}/{} passed.", passed_tests, total_tests);
+    if passed_tests == total_tests {
+        println!("{}", "ALL TESTS PASSED ✨".green().bold());
+    } else {
+        println!("{}", "SOME TESTS FAILED 💀".red().bold());
+    }
+
+    Ok(())
+}
