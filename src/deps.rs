@@ -4,6 +4,7 @@ use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::fs;
+use std::path::Path;
 
 pub fn fetch_dependencies(deps: &HashMap<String, String>) -> Result<Vec<String>> {
     let home_dir = dirs::home_dir().context("Could not find home directory")?;
@@ -50,4 +51,57 @@ pub fn fetch_dependencies(deps: &HashMap<String, String>) -> Result<Vec<String>>
     }
 
     Ok(include_paths)
+}
+
+pub fn add_dependency(lib_input: &str) -> Result<()> {
+    if !Path::new("cx.toml").exists() {
+        println!("{} Error: cx.toml not found.", "x".red());
+        return Ok(());
+    }
+
+    let (name, url) = if lib_input.contains("http") || lib_input.contains("git@") {
+        let name = lib_input
+            .split('/')
+            .last()
+            .unwrap_or("unknown")
+            .replace(".git", "");
+        (name, lib_input.to_string())
+    } else {
+        let parts: Vec<&str> = lib_input.split('/').collect();
+        if parts.len() != 2 {
+            println!("{} Invalid format. Use 'user/repo' or full URL.", "x".red());
+            return Ok(());
+        }
+        let name = parts[1].to_string();
+        let url = format!("https://github.com/{}.git", lib_input);
+        (name, url)
+    };
+
+    println!("{} Adding dependency: {}...", "📦".blue(), name.bold());
+
+    let config_str = fs::read_to_string("cx.toml")?;
+    let mut config: crate::config::CxConfig = toml::from_str(&config_str)?;
+
+    if config.dependencies.is_none() {
+        config.dependencies = Some(HashMap::new());
+    }
+
+    if let Some(deps) = &mut config.dependencies {
+        if deps.contains_key(&name) {
+            println!("{} Dependency '{}' already exists.", "!".yellow(), name);
+            return Ok(());
+        }
+        deps.insert(name.clone(), url.clone());
+    }
+
+    let new_toml = toml::to_string_pretty(&config)?;
+    fs::write("cx.toml", new_toml)?;
+
+    println!("{} Added {} to cx.toml", "✓".green(), name);
+
+    if let Some(deps) = &config.dependencies {
+        let _ = fetch_dependencies(deps)?;
+    }
+
+    Ok(())
 }

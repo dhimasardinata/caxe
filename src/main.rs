@@ -29,6 +29,9 @@ enum Commands {
         #[arg(last = true)]
         args: Vec<String>,
     },
+    Add {
+        lib: String,
+    },
     Watch,
     Clean,
     Test,
@@ -43,6 +46,7 @@ fn main() -> Result<()> {
         Commands::Watch => builder::watch(),
         Commands::Clean => builder::clean(),
         Commands::Test => builder::run_tests(),
+        Commands::Add { lib } => deps::add_dependency(lib),
     }
 }
 
