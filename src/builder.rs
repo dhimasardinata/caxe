@@ -3,12 +3,17 @@ use crate::deps;
 use anyhow::{Context, Result};
 use colored::*;
 use notify::{Config, RecursiveMode, Watcher};
+use rayon::prelude::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
+
+fn get_compiler(has_cpp: bool) -> &'static str {
+    if has_cpp { "clang++" } else { "clang" }
+}
 
 pub fn build_project(release: bool) -> Result<bool> {
     let start_time = Instant::now();
@@ -20,6 +25,10 @@ pub fn build_project(release: bool) -> Result<bool> {
     let config_str = fs::read_to_string("cx.toml")?;
     let config: CxConfig = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
 
+    let build_dir = Path::new("build");
+    let obj_dir = build_dir.join("obj");
+    fs::create_dir_all(&obj_dir)?;
+
     let mut include_flags = Vec::new();
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
@@ -29,25 +38,6 @@ pub fn build_project(release: bool) -> Result<bool> {
 
     let mut source_files = Vec::new();
     let mut has_cpp = false;
-    let mut needs_recompile = false;
-
-    let output_bin = if cfg!(target_os = "windows") {
-        "build/main.exe"
-    } else {
-        "build/main"
-    };
-    let bin_path = Path::new(output_bin);
-
-    let bin_modified = if bin_path.exists() {
-        fs::metadata(bin_path).ok().and_then(|m| m.modified().ok())
-    } else {
-        None
-    };
-
-    if bin_modified.is_none() {
-        needs_recompile = true;
-    }
-
     for entry in WalkDir::new("src").into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if let Some(ext) = path.extension() {
@@ -57,14 +47,6 @@ pub fn build_project(release: bool) -> Result<bool> {
                     has_cpp = true;
                 }
                 source_files.push(path.to_owned());
-
-                if let Some(bin_time) = bin_modified {
-                    if let Ok(src_time) = fs::metadata(path).and_then(|m| m.modified()) {
-                        if src_time > bin_time {
-                            needs_recompile = true;
-                        }
-                    }
-                }
             }
         }
     }
@@ -74,33 +56,95 @@ pub fn build_project(release: bool) -> Result<bool> {
         return Ok(false);
     }
 
-    if needs_recompile {
-        let compiler = if has_cpp { "clang++" } else { "clang" };
-        fs::create_dir_all("build")?;
+    let compiler = get_compiler(has_cpp);
+    let common_flags = include_flags.clone();
 
-        let mut cmd = Command::new(compiler);
-        cmd.args(&source_files);
-        cmd.arg("-o").arg(output_bin);
-        cmd.arg(format!("-std={}", config.package.edition));
+    let object_files: Vec<PathBuf> = source_files
+        .par_iter() // <--- INI MAGIC-NYA: Jalan di banyak core CPU sekaligus!
+        .map(|src_path| -> Result<PathBuf> {
+            let stem = src_path.file_stem().unwrap().to_string_lossy();
+            let obj_path = obj_dir.join(format!("{}.o", stem));
 
-        if release {
-            cmd.arg("-O3");
-            println!("   {} Compiling (Release Mode)...", "🔥".red());
-        } else {
-            cmd.arg("-g").arg("-Wall");
-            println!("   {} Compiling (Debug Mode)...", "⚙".blue());
-        }
+            let needs_compile = if !obj_path.exists() {
+                true
+            } else {
+                let src_time = fs::metadata(src_path)?.modified()?;
+                let obj_time = fs::metadata(&obj_path)?.modified()?;
+                src_time > obj_time
+            };
 
-        if let Some(build_cfg) = &config.build {
-            if let Some(flags) = &build_cfg.cflags {
-                for flag in flags {
+            if needs_compile {
+                let mut cmd = Command::new(compiler);
+                cmd.arg("-c");
+                cmd.arg(src_path);
+                cmd.arg("-o").arg(&obj_path);
+                cmd.arg(format!("-std={}", config.package.edition));
+
+                if release {
+                    cmd.arg("-O3");
+                } else {
+                    cmd.arg("-g").arg("-Wall");
+                }
+
+                // Custom CFLAGS
+                if let Some(build_cfg) = &config.build {
+                    if let Some(flags) = &build_cfg.cflags {
+                        for flag in flags {
+                            cmd.arg(flag);
+                        }
+                    }
+                }
+
+                // Include Flags
+                for flag in &common_flags {
                     cmd.arg(flag);
                 }
+
+                let output = cmd.output().context("Failed to execute compiler")?;
+
+                if !output.status.success() {
+                    let err_msg = String::from_utf8_lossy(&output.stderr).to_string();
+                    println!(
+                        "{} Error compiling {}:\n{}",
+                        "x".red(),
+                        src_path.display(),
+                        err_msg
+                    );
+                    return Err(anyhow::anyhow!("Compilation failed"));
+                }
+            }
+
+            Ok(obj_path)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map_err(|_| anyhow::anyhow!("One or more files failed to compile"))?;
+
+    let output_bin = if cfg!(target_os = "windows") {
+        "build/main.exe"
+    } else {
+        "build/main"
+    };
+
+    let mut needs_link = false;
+    if !Path::new(output_bin).exists() {
+        needs_link = true;
+    } else {
+        let bin_time = fs::metadata(output_bin)?.modified()?;
+        for obj in &object_files {
+            let obj_time = fs::metadata(obj)?.modified()?;
+            if obj_time > bin_time {
+                needs_link = true;
+                break;
             }
         }
-        for flag in &include_flags {
-            cmd.arg(flag);
-        }
+    }
+
+    if needs_link {
+        println!("   {} Linking...", "🔗".cyan());
+        let mut cmd = Command::new(compiler);
+        cmd.args(&object_files);
+        cmd.arg("-o").arg(output_bin);
+
         if let Some(build_cfg) = &config.build {
             if let Some(libs) = &build_cfg.libs {
                 for lib in libs {
@@ -109,19 +153,11 @@ pub fn build_project(release: bool) -> Result<bool> {
             }
         }
 
-        let output = cmd.output();
-        match output {
-            Ok(out) => {
-                if !out.status.success() {
-                    println!("{}", String::from_utf8_lossy(&out.stderr));
-                    println!("{} Build failed", "x".red());
-                    return Ok(false);
-                }
-            }
-            Err(_) => {
-                println!("{} Compiler '{}' not found.", "x".red(), compiler);
-                return Ok(false);
-            }
+        let output = cmd.output()?;
+        if !output.status.success() {
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+            println!("{} Linking failed", "x".red());
+            return Ok(false);
         }
 
         let duration = start_time.elapsed();
