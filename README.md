@@ -9,7 +9,8 @@
 ## ✨ Features
 
 - **⚡ Zero Config Start**: Create a Hello World C++ project in seconds.
-- **📦 Smart Dependency Management**: Define dependencies in `cx.toml`. `cx` automatically downloads libraries from Git and handles linking.
+- **📑 Project Templates**: Start quickly with presets for Raylib or Web Servers.
+- **📦 Smart Dependency Management**: Define dependencies in `cx.toml` or use `cx add`. `cx` automatically downloads libraries from Git and handles linking.
 - **💾 Global Caching**: Libraries are downloaded once and shared across all projects.
 - **👁️ Watch Mode**: Automatically recompiles and runs your project when you save a file.
 - **🧪 Built-in Testing**: Run unit tests easily without configuring external frameworks.
@@ -33,12 +34,33 @@ cargo install --path .
 
 ### 1. Create a new project
 
+Start with a default console app, or use a template.
+
 ```bash
+# Default (Hello World)
 cx new my-game --lang cpp
-cd my-game
+
+# Web Server (cpp-httplib)
+cx new my-server --template web
+
+# Raylib Game Config
+cx new my-game --template raylib
 ```
 
-### 2. Run the project
+### 2. Manage Dependencies
+
+Add or remove libraries directly from the CLI.
+
+```bash
+# Add a library (supports 'user/repo' or full git URL)
+cx add fmtlib/fmt
+cx add nlohmann/json
+
+# Remove a library
+cx remove fmt
+```
+
+### 3. Run the project
 
 ```bash
 cx run
@@ -46,7 +68,7 @@ cx run
 cx run --release
 ```
 
-### 3. Watch mode (Auto-reload)
+### 4. Watch mode (Auto-reload)
 
 Coding without manually recompiling every time.
 
@@ -54,7 +76,7 @@ Coding without manually recompiling every time.
 cx watch
 ```
 
-### 4. Unit Testing 🧪
+### 5. Unit Testing 🧪
 
 No need for complex test runners like GoogleTest or Catch2 for simple projects.
 
