@@ -12,9 +12,9 @@
 - **📑 Project Templates**: Start quickly with presets for Raylib or Web Servers.
 - **📦 Smart Dependency Management**: Define dependencies in `cx.toml` or use `cx add`. `cx` automatically downloads libraries from Git and handles linking.
 - **💾 Global Caching**: Libraries are downloaded once and shared across all projects.
+- **🚀 Parallel & Incremental Builds**: Uses multi-threading to compile files simultaneously and only recompiles what changed.
 - **👁️ Watch Mode**: Automatically recompiles and runs your project when you save a file.
 - **🧪 Built-in Testing**: Run unit tests easily without configuring external frameworks.
-- **🚀 Incremental Builds**: Only recompiles changed files.
 - **🛠️ Custom Configuration**: Support for C++17/20, custom compiler flags, and system linking.
 
 ## 📦 Installation
@@ -60,11 +60,16 @@ cx add nlohmann/json
 cx remove fmt
 ```
 
-### 3. Run the project
+### 3. Build & Run
 
 ```bash
+# Compile only (useful for checking errors)
+cx build
+
+# Compile and Run
 cx run
-# Or run with optimizations
+
+# Run with optimizations (Release mode)
 cx run --release
 ```
 
