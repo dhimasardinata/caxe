@@ -4,7 +4,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*" # Triggers only on tags like v0.1.0, v1.0.0
+      - "v*"
 
 permissions:
   contents: write
@@ -17,18 +17,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             name: cx-linux
+
+          # Windows
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             name: cx-windows.exe
+
+          # macOS (Apple Silicon - M1/M2/M3) -> Default macos-latest is now ARM
           - os: macos-latest
+            target: aarch64-apple-darwin
+            name: cx-macos-arm64
+
+          # macOS (Intel) -> We use macos-13 (Intel based runner) to avoid cross-compilation issues
+          - os: macos-13
             target: x86_64-apple-darwin
-            name: cx-macos
+            name: cx-macos-intel
 
     steps:
       - uses: actions/checkout@v4
+
+      # Install Perl (Required for compiling OpenSSL vendored)
+      - name: Install Perl (Windows only)
+        if: matrix.os == 'windows-latest'
+        uses: shogo82148/actions-setup-perl@v1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,14 +51,15 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build Binary
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --locked
 
-      # Handle renaming differently for Windows vs Unix
+      # Rename Binary (Unix)
       - name: Prepare Artifact (Unix)
         if: matrix.os != 'windows-latest'
         run: |
           mv target/${{ matrix.target }}/release/cx target/${{ matrix.target }}/release/${{ matrix.name }}
 
+      # Rename Binary (Windows)
       - name: Prepare Artifact (Windows)
         if: matrix.os == 'windows-latest'
         run: |
@@ -69,5 +85,6 @@ jobs:
           files: |
             artifacts/cx-linux/cx-linux
             artifacts/cx-windows.exe/cx-windows.exe
-            artifacts/cx-macos/cx-macos
+            artifacts/cx-macos-arm64/cx-macos-arm64
+            artifacts/cx-macos-intel/cx-macos-intel
           generate_release_notes: true
