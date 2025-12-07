@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # 1. Update GitHub Actions (release.yml & ci.yml)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions-deps:
+        patterns:
+          - "*"
+
+  # 2. Update Rust Crates (Cargo.toml)
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      cargo-deps:
+        patterns:
+          - "*"
