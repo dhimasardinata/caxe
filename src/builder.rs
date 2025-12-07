@@ -36,13 +36,20 @@ pub fn build_project(release: bool) -> Result<bool> {
     let config_str = fs::read_to_string("cx.toml")?;
     let config: CxConfig = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
 
-    let build_dir = Path::new("build");
+    let profile = if release { "release" } else { "debug" };
+    let build_dir = Path::new("build").join(profile);
     let obj_dir = build_dir.join("obj");
     fs::create_dir_all(&obj_dir)?;
 
+    let bin_name = if cfg!(target_os = "windows") {
+        format!("{}.exe", config.package.name)
+    } else {
+        config.package.name.clone()
+    };
+    let output_bin = build_dir.join(&bin_name);
+
     let mut include_flags = Vec::new();
     let mut dep_libs = Vec::new();
-
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
             let (incs, libs) = deps::fetch_dependencies(deps)?;
@@ -85,7 +92,7 @@ pub fn build_project(release: bool) -> Result<bool> {
             let obj_path = obj_dir.join(format!("{}.o", stem));
 
             let mut args = Vec::new();
-            args.push(compiler.to_string());
+            args.push(compiler.clone());
             args.push("-c".to_string());
             args.push(src_path.to_string_lossy().to_string());
             args.push("-o".to_string());
@@ -143,30 +150,20 @@ pub fn build_project(release: bool) -> Result<bool> {
                     return Err(anyhow::anyhow!("Compilation failed"));
                 }
             }
-
             Ok(obj_path)
         })
         .collect::<Result<Vec<_>>>()
-        .map_err(|_| anyhow::anyhow!("Compilation failed"))?;
+        .map_err(|_| anyhow::anyhow!("One or more files failed to compile"))?;
 
     let entries = json_entries.into_inner().unwrap();
     let json_str = serde_json::to_string_pretty(&entries)?;
     fs::write("compile_commands.json", json_str)?;
 
-    let output_bin = if cfg!(target_os = "windows") {
-        "build/main.exe"
-    } else {
-        "build/main"
-    };
-
-    let mut needs_link = false;
-    if !Path::new(output_bin).exists() {
-        needs_link = true;
-    } else {
-        let bin_time = fs::metadata(output_bin)?.modified()?;
+    let mut needs_link = !output_bin.exists();
+    if !needs_link {
+        let bin_time = fs::metadata(&output_bin)?.modified()?;
         for obj in &object_files {
-            let obj_time = fs::metadata(obj)?.modified()?;
-            if obj_time > bin_time {
+            if fs::metadata(obj)?.modified()? > bin_time {
                 needs_link = true;
                 break;
             }
@@ -175,9 +172,9 @@ pub fn build_project(release: bool) -> Result<bool> {
 
     if needs_link {
         println!("   {} Linking...", "🔗".cyan());
-        let mut cmd = Command::new(compiler);
+        let mut cmd = Command::new(&compiler);
         cmd.args(&object_files);
-        cmd.arg("-o").arg(output_bin);
+        cmd.arg("-o").arg(&output_bin);
 
         for lib in &dep_libs {
             cmd.arg(lib);
@@ -197,9 +194,11 @@ pub fn build_project(release: bool) -> Result<bool> {
             println!("{} Linking failed", "x".red());
             return Ok(false);
         }
-
-        let duration = start_time.elapsed();
-        println!("{} Build finished in {:.2?}", "✓".green(), duration);
+        println!(
+            "{} Build finished in {:.2?}",
+            "✓".green(),
+            start_time.elapsed()
+        );
     } else {
         println!("{} Up to date", "⚡".green());
     }
@@ -209,21 +208,25 @@ pub fn build_project(release: bool) -> Result<bool> {
 
 pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
     let success = build_project(release)?;
-
     if !success {
         return Ok(());
     }
 
-    let output_bin = if cfg!(target_os = "windows") {
-        "build/main.exe"
+    let config_str = fs::read_to_string("cx.toml")?;
+    let config: CxConfig = toml::from_str(&config_str)?;
+
+    let profile = if release { "release" } else { "debug" };
+    let bin_name = if cfg!(target_os = "windows") {
+        format!("{}.exe", config.package.name)
     } else {
-        "build/main"
+        config.package.name
     };
+
+    let bin_path = Path::new("build").join(profile).join(bin_name);
+
     println!("{} Running...\n", "▶".green());
-
-    let mut run_cmd = Command::new(format!("./{}", output_bin));
+    let mut run_cmd = Command::new(bin_path);
     run_cmd.args(run_args);
-
     let _ = run_cmd.status();
 
     Ok(())

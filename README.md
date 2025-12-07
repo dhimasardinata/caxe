@@ -26,8 +26,18 @@ Prerequisites:
 - Rust (Cargo)
 - Clang or GCC installed
 
+### Option 1: Install from Crates.io (Recommended)
+
+If you have Rust installed, this is the easiest way.
+
 ```bash
-git clone https://github.com/dhimasardinata/caxe.git
+cargo install caxe
+```
+
+### Option 2: Build from Source
+
+```bash
+git clone https://github.com/dhimassardinata/caxe.git
 cd caxe
 cargo install --path .
 ```
