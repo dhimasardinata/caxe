@@ -2,7 +2,7 @@
 
 [![CI/CD Pipeline](https://github.com/dhimasardinata/cx/actions/workflows/ci.yml/badge.svg)](https://github.com/dhimasardinata/cx/actions/workflows/ci.yml)
 
-**caxe** is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
+**caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
 
 It provides a unified workflow for scaffolding, building, testing, and managing dependencies—giving C++ developers the modern experience they deserve.
 
@@ -28,7 +28,7 @@ Prerequisites:
 
 ```bash
 git clone https://github.com/dhimasardinata/caxe.git
-cd cx
+cd caxe
 cargo install --path .
 ```
 
