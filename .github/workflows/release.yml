@@ -1,0 +1,73 @@
+# .github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*" # Triggers only on tags like v0.1.0, v1.0.0
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            name: cx-linux
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: cx-windows.exe
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            name: cx-macos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      # Handle renaming differently for Windows vs Unix
+      - name: Prepare Artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          mv target/${{ matrix.target }}/release/cx target/${{ matrix.target }}/release/${{ matrix.name }}
+
+      - name: Prepare Artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          mv target/${{ matrix.target }}/release/cx.exe target/${{ matrix.target }}/release/${{ matrix.name }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/${{ matrix.name }}
+
+  publish:
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            artifacts/cx-linux/cx-linux
+            artifacts/cx-windows.exe/cx-windows.exe
+            artifacts/cx-macos/cx-macos
+          generate_release_notes: true

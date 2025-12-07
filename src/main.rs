@@ -11,7 +11,7 @@ mod deps;
 
 #[derive(Parser)]
 #[command(name = "cx")]
-#[command(about = "The modern C/C++ project manager", version = "0.2.0")]
+#[command(about = "The modern C/C++ project manager", version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -57,8 +57,14 @@ fn main() -> Result<()> {
             lang,
             template,
         } => create_project(name, lang, template),
-        Commands::Build { release } => builder::build_project(*release).map(|_| ()),
+
+        Commands::Build { release } => {
+            let config = builder::load_config()?;
+            builder::build_project(&config, *release).map(|_| ())
+        }
+
         Commands::Run { release, args } => builder::build_and_run(*release, args),
+
         Commands::Watch => builder::watch(),
         Commands::Clean => builder::clean(),
         Commands::Test => builder::run_tests(),
@@ -69,12 +75,14 @@ fn main() -> Result<()> {
 }
 
 fn create_project(name_opt: &Option<String>, lang_cli: &str, templ_cli: &str) -> Result<()> {
+    // 1. Interactive Inputs
     let name = match name_opt {
         Some(n) => n.clone(),
         None => Text::new("What is your project name?")
             .with_default("my-app")
             .prompt()?,
     };
+
     let template = if name_opt.is_none() {
         let options = vec!["console", "web", "raylib"];
         Select::new("Select a template:", options).prompt()?
@@ -89,6 +97,7 @@ fn create_project(name_opt: &Option<String>, lang_cli: &str, templ_cli: &str) ->
         lang_cli
     };
 
+    // 2. Setup Directory
     let path = Path::new(&name);
     if path.exists() {
         println!("{} Error: Directory '{}' already exists", "x".red(), name);
@@ -97,7 +106,99 @@ fn create_project(name_opt: &Option<String>, lang_cli: &str, templ_cli: &str) ->
 
     fs::create_dir_all(path.join("src")).context("Failed to create src")?;
 
-    let (toml_content, main_code) = match template {
+    // 3. Get Template Content (Refactored)
+    let (toml_content, main_code) = get_template(&name, lang, template);
+
+    // 4. Write Files
+    let ext = if lang == "c" { "c" } else { "cpp" };
+    fs::write(path.join("cx.toml"), toml_content)?;
+    fs::write(path.join("src").join(format!("main.{}", ext)), main_code)?;
+    fs::write(path.join(".gitignore"), "/build\n/compile_commands.json\n")?;
+
+    // 5. VS Code Intellisense Support
+    let vscode_dir = path.join(".vscode");
+    fs::create_dir_all(&vscode_dir).context("Failed to create .vscode dir")?;
+
+    let vscode_json = r#"{
+    "configurations": [
+        {
+            "name": "cx-config",
+            "includePath": ["${workspaceFolder}/**"],
+            "compileCommands": "${workspaceFolder}/compile_commands.json",
+            "cStandard": "c17",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}"#;
+    fs::write(vscode_dir.join("c_cpp_properties.json"), vscode_json)?;
+
+    // 6. Success Message
+    println!(
+        "{} Created new project: {} (template: {})",
+        "✓".green(),
+        name.bold(),
+        template.cyan()
+    );
+    println!("  cd {}\n  cx run", name);
+    Ok(())
+}
+
+fn print_info() -> Result<()> {
+    println!("{} v{}", "caxe".bold().cyan(), env!("CARGO_PKG_VERSION"));
+    println!("The Modern C/C++ Project Manager 🪓");
+    println!("------------------------------------");
+
+    // System Info
+    println!(
+        "{}: {} {}",
+        "System".bold(),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+
+    // Cache Info
+    let home = dirs::home_dir().unwrap_or_default();
+    println!(
+        "{}: {}",
+        "Cache".bold(),
+        home.join(".cx").join("cache").display()
+    );
+
+    println!("\n{}", "Toolchain Check:".bold());
+    let compilers = vec![
+        ("clang++", "LLVM C++"),
+        ("g++", "GNU C++"),
+        ("gcc", "GNU C"),
+        ("cl", "MSVC"),
+        ("cmake", "CMake"),
+        ("make", "Make"),
+    ];
+
+    for (bin, name) in compilers {
+        let output = std::process::Command::new(bin).arg("--version").output();
+        let (status, version) = match output {
+            Ok(out) => {
+                let v_str = String::from_utf8_lossy(&out.stdout);
+                let first_line = v_str.lines().next().unwrap_or("Detected").trim();
+                let short_ver = if first_line.len() > 40 {
+                    &first_line[..40]
+                } else {
+                    first_line
+                };
+                ("✓".green(), short_ver.to_string())
+            }
+            Err(_) => ("x".red(), "Not Found".dimmed().to_string()),
+        };
+        println!("  [{}] {:<10} : ({}) {}", status, bin, name, version);
+    }
+
+    Ok(())
+}
+
+// --- Template Helper ---
+fn get_template(name: &str, lang: &str, template: &str) -> (String, String) {
+    match template {
         "raylib" => (
             format!(
                 r#"[package]
@@ -126,7 +227,8 @@ int main() {
     CloseWindow();
     return 0;
 }
-"#,
+"#
+            .to_string(),
         ),
         "web" => {
             if lang == "c" {
@@ -162,7 +264,8 @@ int main() {
   mg_mgr_free(&mgr);
   return 0;
 }
-"#,
+"#
+                    .to_string(),
                 )
             } else {
                 (
@@ -192,7 +295,8 @@ int main() {
     svr.listen("0.0.0.0", 8080);
     return 0;
 }
-"#,
+"#
+                    .to_string(),
                 )
             }
         }
@@ -219,65 +323,7 @@ edition = "{}"
             } else {
                 "#include <iostream>\nint main() { std::cout << \"Hello cx!\" << std::endl; return 0; }"
             };
-            (cfg, code)
+            (cfg, code.to_string())
         }
-    };
-
-    fs::write(path.join("cx.toml"), toml_content)?;
-    let ext = if lang == "c" { "c" } else { "cpp" };
-    fs::write(path.join("src").join(format!("main.{}", ext)), main_code)?;
-    fs::write(path.join(".gitignore"), "/build\n")?;
-
-    let vscode_dir = path.join(".vscode");
-    fs::create_dir_all(&vscode_dir).context("Failed to create .vscode dir")?;
-
-    let vscode_json = r#"{
-    "configurations": [
-        {
-            "name": "cx-config",
-            "includePath": ["${workspaceFolder}/**"],
-            "compileCommands": "${workspaceFolder}/compile_commands.json",
-            "cStandard": "c17",
-            "cppStandard": "c++17"
-        }
-    ],
-    "version": 4
-}"#;
-
-    fs::write(vscode_dir.join("c_cpp_properties.json"), vscode_json)?;
-
-    println!(
-        "{} Created new project: {} (template: {})",
-        "✓".green(),
-        name.bold(),
-        template.cyan()
-    );
-    println!("  cd {}\n  cx run", name);
-    Ok(())
-}
-
-fn print_info() -> Result<()> {
-    println!("caxe (cx) v{}", env!("CARGO_PKG_VERSION"));
-    println!("The Modern C/C++ Project Manager 🪓");
-    println!("------------------------------------");
-
-    let home = dirs::home_dir().unwrap_or_default();
-    println!("Cache Dir : {}", home.join(".cx").join("cache").display());
-
-    let compilers = vec!["clang++", "g++", "gcc", "cl"];
-    println!("Compilers detected:");
-    for c in compilers {
-        let status = if std::process::Command::new(c)
-            .arg("--version")
-            .output()
-            .is_ok()
-        {
-            "Installed".green()
-        } else {
-            "Not Found".red()
-        };
-        println!("  - {:<10} : {}", c, status);
     }
-
-    Ok(())
 }

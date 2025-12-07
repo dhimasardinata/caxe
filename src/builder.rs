@@ -12,10 +12,30 @@ use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
+// --- Helper: Load Config Once ---
+pub fn load_config() -> Result<CxConfig> {
+    if !Path::new("cx.toml").exists() {
+        return Err(anyhow::anyhow!("cx.toml not found"));
+    }
+    let config_str = fs::read_to_string("cx.toml")?;
+    toml::from_str(&config_str).context("Failed to parse cx.toml")
+}
+
+// --- Helper: Get Compiler ---
 fn get_compiler(config: &CxConfig, has_cpp: bool) -> String {
     if let Some(build) = &config.build {
         if let Some(compiler) = &build.compiler {
             return compiler.clone();
+        }
+    }
+
+    if has_cpp {
+        if let Ok(env_cxx) = std::env::var("CXX") {
+            return env_cxx;
+        }
+    } else {
+        if let Ok(env_cc) = std::env::var("CC") {
+            return env_cc;
         }
     }
 
@@ -26,9 +46,9 @@ fn get_compiler(config: &CxConfig, has_cpp: bool) -> String {
     }
 }
 
+// --- Helper: Run Script (Cross Platform) ---
 fn run_script(script: &str, project_dir: &Path) -> Result<()> {
     println!("   {} Running script: '{}'...", "📜".magenta(), script);
-
     let status = if cfg!(target_os = "windows") {
         Command::new("cmd")
             .args(&["/C", script])
@@ -47,26 +67,22 @@ fn run_script(script: &str, project_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn build_project(release: bool) -> Result<bool> {
+// --- CORE: Build Project ---
+pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     let start_time = Instant::now();
     let current_dir = std::env::current_dir()?;
 
-    if !Path::new("cx.toml").exists() {
-        println!("{} Error: cx.toml not found.", "x".red());
-        return Ok(false);
-    }
-    let config_str = fs::read_to_string("cx.toml")?;
-    let config: CxConfig = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
-
+    // 1. Pre-build Script
     if let Some(scripts) = &config.scripts {
         if let Some(pre) = &scripts.pre_build {
-            if let Err(e) = run_script(pre, Path::new(&current_dir)) {
+            if let Err(e) = run_script(pre, &current_dir) {
                 println!("{} Pre-build script failed: {}", "x".red(), e);
                 return Ok(false);
             }
         }
     }
 
+    // 2. Setup Directories
     let profile = if release { "release" } else { "debug" };
     let build_dir = Path::new("build").join(profile);
     let obj_dir = build_dir.join("obj");
@@ -79,6 +95,7 @@ pub fn build_project(release: bool) -> Result<bool> {
     };
     let output_bin = build_dir.join(&bin_name);
 
+    // 3. Fetch Dependencies
     let mut include_flags = Vec::new();
     let mut dep_libs = Vec::new();
     if let Some(deps) = &config.dependencies {
@@ -89,6 +106,7 @@ pub fn build_project(release: bool) -> Result<bool> {
         }
     }
 
+    // 4. Collect Source Files
     let mut source_files = Vec::new();
     let mut has_cpp = false;
 
@@ -110,18 +128,18 @@ pub fn build_project(release: bool) -> Result<bool> {
         return Ok(false);
     }
 
-    let compiler = get_compiler(&config, has_cpp);
+    let compiler = get_compiler(config, has_cpp);
     let common_flags = include_flags.clone();
+    let current_dir_str = current_dir.to_string_lossy().to_string();
 
-    let json_entries = std::sync::Mutex::new(Vec::new());
-    let current_dir = std::env::current_dir()?.to_string_lossy().to_string();
-
-    let object_files: Vec<PathBuf> = source_files
+    // 5. Parallel Compilation (Lock-Free Optimization)
+    let results: Vec<(PathBuf, serde_json::Value)> = source_files
         .par_iter()
-        .map(|src_path| -> Result<PathBuf> {
+        .map(|src_path| -> Result<(PathBuf, serde_json::Value)> {
             let stem = src_path.file_stem().unwrap().to_string_lossy();
             let obj_path = obj_dir.join(format!("{}.o", stem));
 
+            // Construct Arguments
             let mut args = Vec::new();
             args.push(compiler.clone());
             args.push("-c".to_string());
@@ -139,24 +157,19 @@ pub fn build_project(release: bool) -> Result<bool> {
 
             if let Some(build_cfg) = &config.build {
                 if let Some(flags) = &build_cfg.cflags {
-                    for flag in flags {
-                        args.push(flag.clone());
-                    }
+                    args.extend(flags.iter().cloned());
                 }
             }
-            for flag in &common_flags {
-                args.push(flag.clone());
-            }
+            args.extend(common_flags.iter().cloned());
 
-            {
-                let entry = json!({
-                    "directory": current_dir,
-                    "command": args.join(" "),
-                    "file": src_path.to_string_lossy()
-                });
-                json_entries.lock().unwrap().push(entry);
-            }
+            // Prepare JSON entry for Intellisense
+            let entry = json!({
+                "directory": current_dir_str,
+                "command": args.join(" "),
+                "file": src_path.to_string_lossy()
+            });
 
+            // Incremental Check
             let needs_compile = if !obj_path.exists() {
                 true
             } else {
@@ -168,8 +181,8 @@ pub fn build_project(release: bool) -> Result<bool> {
             if needs_compile {
                 let mut cmd = Command::new(&args[0]);
                 cmd.args(&args[1..]);
-
                 let output = cmd.output().context("Failed to execute compiler")?;
+
                 if !output.status.success() {
                     let err_msg = String::from_utf8_lossy(&output.stderr).to_string();
                     println!(
@@ -181,15 +194,20 @@ pub fn build_project(release: bool) -> Result<bool> {
                     return Err(anyhow::anyhow!("Compilation failed"));
                 }
             }
-            Ok(obj_path)
-        })
-        .collect::<Result<Vec<_>>>()
-        .map_err(|_| anyhow::anyhow!("One or more files failed to compile"))?;
 
-    let entries = json_entries.into_inner().unwrap();
-    let json_str = serde_json::to_string_pretty(&entries)?;
+            Ok((obj_path, entry))
+        })
+        .collect::<Result<Vec<_>>>()?; // Collects errors if any
+
+    // Unzip results separate object files and JSON entries
+    let (object_files, json_entries): (Vec<PathBuf>, Vec<serde_json::Value>) =
+        results.into_iter().unzip();
+
+    // 6. Generate compile_commands.json
+    let json_str = serde_json::to_string_pretty(&json_entries)?;
     fs::write("compile_commands.json", json_str)?;
 
+    // 7. Linking
     let mut needs_link = !output_bin.exists();
     if !needs_link {
         let bin_time = fs::metadata(&output_bin)?.modified()?;
@@ -226,9 +244,10 @@ pub fn build_project(release: bool) -> Result<bool> {
             return Ok(false);
         }
 
+        // 8. Post-build Script
         if let Some(scripts) = &config.scripts {
             if let Some(post) = &scripts.post_build {
-                if let Err(e) = run_script(post, Path::new(&current_dir)) {
+                if let Err(e) = run_script(post, &current_dir) {
                     println!("{} Post-build script failed: {}", "x".red(), e);
                 }
             }
@@ -246,20 +265,21 @@ pub fn build_project(release: bool) -> Result<bool> {
     Ok(true)
 }
 
+// --- COMMAND: Build & Run ---
 pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
-    let success = build_project(release)?;
+    // Load config once here
+    let config = load_config()?;
+
+    let success = build_project(&config, release)?;
     if !success {
         return Ok(());
     }
-
-    let config_str = fs::read_to_string("cx.toml")?;
-    let config: CxConfig = toml::from_str(&config_str)?;
 
     let profile = if release { "release" } else { "debug" };
     let bin_name = if cfg!(target_os = "windows") {
         format!("{}.exe", config.package.name)
     } else {
-        config.package.name
+        config.package.name.clone()
     };
 
     let bin_path = Path::new("build").join(profile).join(bin_name);
@@ -272,17 +292,20 @@ pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
     Ok(())
 }
 
+// --- COMMAND: Watch ---
 pub fn watch() -> Result<()> {
     println!("{} Watching for changes in src/...", "👀".cyan());
     let (tx, rx) = channel();
-    let config = Config::default().with_poll_interval(Duration::from_secs(1));
-    let mut watcher = notify::RecommendedWatcher::new(tx, config)?;
+    let config_notify = Config::default().with_poll_interval(Duration::from_secs(1));
+    let mut watcher = notify::RecommendedWatcher::new(tx, config_notify)?;
 
     watcher.watch(Path::new("src"), RecursiveMode::Recursive)?;
 
+    // First run
     run_and_clear();
 
     while let Ok(_) = rx.recv() {
+        // Debounce simple
         std::thread::sleep(Duration::from_millis(100));
         while let Ok(_) = rx.try_recv() {}
         run_and_clear();
@@ -298,16 +321,32 @@ fn run_and_clear() {
     }
 }
 
+// --- COMMAND: Clean ---
 pub fn clean() -> Result<()> {
+    let mut cleaned = false;
+
     if Path::new("build").exists() {
         fs::remove_dir_all("build").context("Failed to remove build directory")?;
-        println!("{} Build directory cleaned", "✓".green());
+        cleaned = true;
+    }
+
+    if Path::new("compile_commands.json").exists() {
+        fs::remove_file("compile_commands.json").context("Failed to remove compile commands")?;
+        cleaned = true;
+    }
+
+    if cleaned {
+        println!(
+            "{} Project cleaned (build/ & metadata removed)",
+            "✓".green()
+        );
     } else {
         println!("{} Nothing to clean", "!".yellow());
     }
     Ok(())
 }
 
+// --- COMMAND: Run Tests ---
 pub fn run_tests() -> Result<()> {
     let test_dir = Path::new("tests");
     if !test_dir.exists() {
@@ -315,8 +354,8 @@ pub fn run_tests() -> Result<()> {
         return Ok(());
     }
 
-    let config_str = fs::read_to_string("cx.toml").unwrap_or_default();
-    let config: CxConfig = toml::from_str(&config_str).unwrap_or_else(|_| CxConfig {
+    // Load config or default
+    let config = load_config().unwrap_or_else(|_| CxConfig {
         package: crate::config::PackageConfig {
             name: "test_runner".into(),
             version: "0.0.0".into(),
@@ -344,10 +383,11 @@ pub fn run_tests() -> Result<()> {
 
     for entry in WalkDir::new("tests").into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
-        let is_cpp = path
-            .extension()
-            .map_or(false, |ext| ext == "cpp" || ext == "cc" || ext == "cxx");
+        let is_cpp = path.extension().map_or(false, |ext| {
+            ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap())
+        });
         let is_c = path.extension().map_or(false, |ext| ext == "c");
+
         if is_cpp || is_c {
             total_tests += 1;
             let test_name = path.file_stem().unwrap().to_string_lossy();
@@ -363,19 +403,12 @@ pub fn run_tests() -> Result<()> {
 
             if let Some(build_cfg) = &config.build {
                 if let Some(flags) = &build_cfg.cflags {
-                    for flag in flags {
-                        cmd.arg(flag);
-                    }
+                    cmd.args(flags);
                 }
             }
 
-            for flag in &include_flags {
-                cmd.arg(flag);
-            }
-
-            for lib in &dep_libs {
-                cmd.arg(lib);
-            }
+            cmd.args(&include_flags);
+            cmd.args(&dep_libs);
 
             if let Some(build_cfg) = &config.build {
                 if let Some(libs) = &build_cfg.libs {
@@ -412,9 +445,9 @@ pub fn run_tests() -> Result<()> {
     }
 
     println!("\nTest Result: {}/{} passed.", passed_tests, total_tests);
-    if passed_tests == total_tests {
+    if total_tests > 0 && passed_tests == total_tests {
         println!("{}", "ALL TESTS PASSED ✨".green().bold());
-    } else {
+    } else if total_tests > 0 {
         println!("{}", "SOME TESTS FAILED 💀".red().bold());
     }
 

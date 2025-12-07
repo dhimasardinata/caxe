@@ -1,4 +1,5 @@
-name: CI/CD Pipeline
+# .github/workflows/ci.yml
+name: CI
 
 on:
   push:
@@ -18,7 +19,11 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - uses: actions/cache@v3
         with:
           path: |
@@ -28,26 +33,8 @@ jobs:
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build
-        run: cargo build --verbose
+      - name: Check
+        run: cargo check --verbose
 
       - name: Run internal tests
         run: cargo test --verbose
-
-  release:
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    name: Create Release Binary
-    runs-on: windows-latest
-
-    steps:
-      - uses: actions/checkout@v3
-
-      - name: Build Release
-        run: cargo build --release
-
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cx-windows
-          path: target/release/cx.exe
