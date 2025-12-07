@@ -5,13 +5,13 @@
 
 **caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
 
-It provides a unified workflow for scaffolding, building, testing, formatting, and managing dependencies—giving C++ developers the modern experience they deserve.
+It provides a unified workflow for scaffolding, building, testing, formatting, and managing dependencies—giving C/C++ developers the modern experience they deserve.
 
 > **Zero Configuration. Lightning Fast. Batteries Included.**
 
 ## ✨ Features
 
-- **⚡ Zero Config Start**: Create a Hello World C++ project in seconds.
+- **⚡ Zero Config Start**: Create a Hello World C/C++ project in seconds.
 - **📦 Smart Dependency Management**:
   - **Git Libraries**: Automatically downloads & builds libraries from GitHub.
   - **System Packages**: Native support for `pkg-config` (e.g., GTK, OpenSSL).
