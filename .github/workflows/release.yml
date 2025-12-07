@@ -37,7 +37,7 @@ jobs:
             name: cx-macos-intel
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Perl (Windows only)
         if: matrix.os == 'windows-latest'
@@ -73,7 +73,7 @@ jobs:
           mv target/${{ matrix.target }}/release/cx.exe target/${{ matrix.target }}/release/${{ matrix.name }}
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.name }}
           path: target/${{ matrix.target }}/release/${{ matrix.name }}
@@ -82,12 +82,12 @@ jobs:
     needs: build-and-release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v6
         with:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/cx-linux/cx-linux
