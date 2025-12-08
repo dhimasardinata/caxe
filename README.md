@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/dhimasardinata/caxe/actions/workflows/ci.yml/badge.svg)](https://github.com/dhimasardinata/caxe/actions/workflows/ci.yml)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/dhimasardinata/caxe?label=latest%20version&color=green)](https://github.com/dhimasardinata/caxe/releases)
+[![GitHub all releases](https://img.shields.io/github/downloads/dhimasardinata/caxe/total?color=blue&label=downloads&logo=github)](https://github.com/dhimasardinata/caxe/releases)
 [![Crates.io](https://img.shields.io/crates/v/caxe.svg)](https://crates.io/crates/caxe)
 
 **caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
@@ -32,7 +33,7 @@ No Rust or Cargo required. Download the latest release for your OS:
 - **Linux**: [Download cx-linux](https://github.com/dhimasardinata/caxe/releases/latest)
 - **macOS**: [Download cx-macos](https://github.com/dhimasardinata/caxe/releases/latest)
 
-> Add the binary to your system PATH to run it from anywhere.
+> **Tip:** Rename the binary to `cx` (or `cx.exe`) and add it to your system PATH to run it from anywhere.
 
 ### Option 2: Install via Cargo
 
@@ -42,11 +43,22 @@ If you are a Rust developer:
 cargo install caxe
 ```
 
-## 🚀 Usage
+## 🚀 Quick Start
 
-### 1. Create a new project
+### Interactive Mode
 
-Start with a default console app, or use a template.
+Simply run `cx new` without arguments to start the interactive wizard.
+
+```bash
+cx new
+# ? What is your project name? › my-app
+# ? Select a template: › console
+# ? Select language: › cpp
+```
+
+### CLI Arguments Mode
+
+You can also skip the questions by passing arguments directly:
 
 ```bash
 # Default (Hello World)
@@ -59,63 +71,118 @@ cx new my-server --template web
 cx new my-game --template raylib
 ```
 
-### 2. Manage Dependencies
+---
 
-Define dependencies in `cx.toml`. `caxe` supports both Git repositories and System Packages (`pkg-config`).
+## 📖 CLI Reference
 
-```toml
-[dependencies]
-# 1. Git Dependency (Auto download & link)
-json = "https://github.com/nlohmann/json.git"
+### `cx new <name>`
 
-# 2. System Dependency (Uses pkg-config)
-gtk4 = { pkg = "gtk4" }
-openssl = { pkg = "openssl" }
-```
+Creates a new project.
 
-### 3. Build & Run
+- `--lang <c|cpp>` : Set project language (default: `cpp`).
+- `--template <console|web|raylib>` : Choose a project template (default: `console`).
+
+### `cx run`
+
+Compiles and runs the project.
+
+- `--release` : Enable optimizations (`-O3`).
+- `-- <args>` : Pass arguments to your executable.
+
+  ```bash
+  cx run --release -- --my-arg 123
+  ```
+
+### `cx build`
+
+Compiles the project without running it. Useful for checking errors.
+
+- `--release` : Build for release (output in `build/release/`).
+
+### `cx add <lib>`
+
+Adds a Git dependency to `cx.toml`.
+
+- Supports `user/repo` shortcut or full Git URL.
+
+  ```bash
+  cx add nlohmann/json
+  cx add https://github.com/fmtlib/fmt.git
+  ```
+
+> _Note: For system packages (pkg-config), edit `cx.toml` manually (see below)._
+
+### `cx remove <lib>`
+
+Removes a dependency from `cx.toml` and stops linking it.
 
 ```bash
-# Compile and Run
-cx run
-
-# Run with optimizations (Release mode)
-cx run --release
-
-# Format code (Requires clang-format)
-cx fmt
+cx remove json
 ```
 
-### 4. Watch mode (Auto-reload)
+### `cx fmt`
 
-Coding without manually recompiling every time.
+Formats all source code in `src/` using `clang-format`.
 
-```bash
-cx watch
-```
+> Requires `clang-format` to be installed on your system.
+
+### `cx clean`
+
+Removes the `build/` directory and metadata files (`compile_commands.json`). Use this if you want a fresh build from scratch.
+
+### `cx watch`
+
+Watches for file changes in `src/` and automatically recompiles & runs the project.
+
+### `cx test`
+
+Compiles and runs all `.cpp` or `.c` files found in the `tests/` directory.
+
+### `cx info`
+
+Displays useful diagnostic information:
+
+- System OS & Architecture.
+- Global cache directory path.
+- Detected toolchains (gcc, clang, msvc, make, cmake).
+
+---
 
 ## ⚙️ Configuration (`cx.toml`)
 
-Example of a full configuration file:
+`caxe` uses `cx.toml` to manage the project. Here is a comprehensive example:
 
 ```toml
 [package]
 name = "my-awesome-app"
 version = "0.1.0"
-edition = "c++20"
+edition = "c++20" # or "c17" for C projects
 
 [build]
-# Optional: Override output binary name (default is package name)
+# Override output binary name (default is package name)
 bin = "app"
-# Optional: Custom flags
-cflags = ["-O2", "-Wall", "-Wextra"]
+# Add custom compiler flags
+cflags = ["-O2", "-Wall", "-Wextra", "-DDEBUG"]
+# Link system libraries manually (e.g. -lm -lpthread)
 libs = ["pthread", "m"]
+# Force specific compiler (optional, defaults to auto-detect)
+compiler = "clang++"
 
 [dependencies]
+# 1. Git Dependency (Auto download & link)
 fmt = "https://github.com/fmtlib/fmt.git"
-sdl2 = { pkg = "sdl2" }
+
+# 2. System Dependency (Uses pkg-config)
+# Automatically adds include paths and link flags
+gtk4 = { pkg = "gtk4" }
+openssl = { pkg = "openssl" }
+
+# 3. Complex Git Dependency
+# Build a custom library from source with a specific command
+raylib = { git = "https://github.com/raysan5/raylib.git", build = "make", output = "src/libraylib.a" }
 
 [scripts]
+# Run shell commands before or after build
 pre_build = "echo Compiling..."
 post_build = "echo Done!"
 ```
@@ -124,7 +191,7 @@ post_build = "echo Done!"
 
 ### Environment Variables
 
-`caxe` respects standard environment variables for compiler selection:
+`caxe` respects standard environment variables for compiler selection. This is useful for CI/CD or switching compilers without editing `cx.toml`.
 
 ```bash
 # Linux/Mac
@@ -136,7 +203,21 @@ $env:CXX="g++"; cx run
 
 ### Unit Testing
 
-Create a `tests/` directory and add `.cpp` files. `caxe` will compile and run them automatically.
+No need for complex test runners like GoogleTest for simple projects.
+
+1. Create a `tests/` directory.
+2. Add `.cpp` files (e.g., `tests/test_math.cpp`).
+3. Use standard `assert` or return `0` for success.
+
+```cpp
+#include <cassert>
+int main() {
+    assert(1 + 1 == 2);
+    return 0; // Pass
+}
+```
+
+Run them all with:
 
 ```bash
 cx test
