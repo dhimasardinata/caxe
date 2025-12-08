@@ -15,11 +15,12 @@ It provides a unified workflow for scaffolding, building, testing, formatting, a
 
 - **⚡ Zero Config Start**: Create a Hello World C/C++ project in seconds.
 - **📦 Smart Dependency Management**:
-  - **Git Libraries**: Automatically downloads & builds libraries from GitHub.
+  - **Git Libraries**: Auto-download from GitHub. Supports **Pinning** (Tag/Branch/Commit) for stability.
   - **System Packages**: Native support for `pkg-config` (e.g., GTK, OpenSSL).
-- **🎨 Code Formatting**: Built-in `cx fmt` command to keep your code clean (via `clang-format`).
+  - **Header-Only Support**: Automatically detects libraries that don't need linking (e.g., nlohmann/json).
+- **🎨 Code Formatting**: Built-in `cx fmt` command (via `clang-format`).
 - **🚀 Parallel & Incremental Builds**: Lock-free parallel compilation engine for maximum speed.
-- **💾 Global Caching**: Libraries are downloaded once and shared across all projects.
+- **💾 Global Caching**: Libraries are downloaded once and shared across all projects. Use `cx update` to refresh them.
 - **👁️ Watch Mode**: Automatically recompiles and runs your project when you save a file.
 - **🛠️ Flexible Configuration**: Custom binary names, environment variable support (`CC`, `CXX`), and build scripts.
 
@@ -33,11 +34,9 @@ No Rust or Cargo required. Download the latest release for your OS:
 - **Linux**: [Download cx-linux](https://github.com/dhimasardinata/caxe/releases/latest)
 - **macOS**: [Download cx-macos](https://github.com/dhimasardinata/caxe/releases/latest)
 
-> **Tip:** Rename the binary to `cx` (or `cx.exe`) and add it to your system PATH to run it from anywhere.
+> **Tip:** Rename the binary to `cx` (or `cx.exe`) and add it to your system PATH.
 
 ### Option 2: Install via Cargo
-
-If you are a Rust developer:
 
 ```bash
 cargo install caxe
@@ -47,7 +46,7 @@ cargo install caxe
 
 ### Interactive Mode
 
-Simply run `cx new` without arguments to start the interactive wizard.
+Simply run `cx new` without arguments to start the wizard.
 
 ```bash
 cx new
@@ -57,8 +56,6 @@ cx new
 ```
 
 ### CLI Arguments Mode
-
-You can also skip the questions by passing arguments directly:
 
 ```bash
 # Default (Hello World)
@@ -79,8 +76,8 @@ cx new my-game --template raylib
 
 Creates a new project.
 
-- `--lang <c|cpp>` : Set project language (default: `cpp`).
-- `--template <console|web|raylib>` : Choose a project template (default: `console`).
+- `--lang <c|cpp>` : Set language.
+- `--template <console|web|raylib>` : Choose template.
 
 ### `cx run`
 
@@ -89,135 +86,104 @@ Compiles and runs the project.
 - `--release` : Enable optimizations (`-O3`).
 - `-- <args>` : Pass arguments to your executable.
 
-  ```bash
-  cx run --release -- --my-arg 123
-  ```
-
 ### `cx build`
 
-Compiles the project without running it. Useful for checking errors.
-
-- `--release` : Build for release (output in `build/release/`).
+Compiles the project without running it.
 
 ### `cx add <lib>`
 
-Adds a Git dependency to `cx.toml`.
+Adds a Git dependency to `cx.toml`. Supports version pinning.
 
-- Supports `user/repo` shortcut or full Git URL.
-
-  ```bash
-  cx add nlohmann/json
-  cx add https://github.com/fmtlib/fmt.git
-  ```
-
-> _Note: For system packages (pkg-config), edit `cx.toml` manually (see below)._
+- **Standard**: `cx add nlohmann/json`
+- **Tag**: `cx add nlohmann/json --tag v3.11.2`
+- **Branch**: `cx add raysan5/raylib --branch master`
+- **Commit**: `cx add fmtlib/fmt --rev a3b1c2d`
 
 ### `cx remove <lib>`
 
-Removes a dependency from `cx.toml` and stops linking it.
+Removes a dependency from `cx.toml`.
 
-```bash
-cx remove json
-```
+### `cx update`
+
+Updates all dependencies in your cache to the latest version (unless pinned).
 
 ### `cx fmt`
 
-Formats all source code in `src/` using `clang-format`.
-
-> Requires `clang-format` to be installed on your system.
+Formats all source code in `src/`. Requires `clang-format`.
 
 ### `cx clean`
 
-Removes the `build/` directory and metadata files (`compile_commands.json`). Use this if you want a fresh build from scratch.
+Removes the `build/` directory and metadata files.
 
 ### `cx watch`
 
-Watches for file changes in `src/` and automatically recompiles & runs the project.
+Watches for file changes and auto-runs.
 
 ### `cx test`
 
-Compiles and runs all `.cpp` or `.c` files found in the `tests/` directory.
+Compiles and runs files in `tests/` directory.
 
 ### `cx info`
 
-Displays useful diagnostic information:
-
-- System OS & Architecture.
-- Global cache directory path.
-- Detected toolchains (gcc, clang, msvc, make, cmake).
+Displays diagnostic information (OS, Cache Path, Compilers).
 
 ---
 
 ## ⚙️ Configuration (`cx.toml`)
 
-`caxe` uses `cx.toml` to manage the project. Here is a comprehensive example:
+Comprehensive configuration example:
 
 ```toml
 [package]
 name = "my-awesome-app"
 version = "0.1.0"
-edition = "c++20" # or "c17" for C projects
+edition = "c++20"
 
 [build]
-# Override output binary name (default is package name)
-bin = "app"
-# Add custom compiler flags
-cflags = ["-O2", "-Wall", "-Wextra", "-DDEBUG"]
-# Link system libraries manually (e.g. -lm -lpthread)
+bin = "app" # Output: app.exe
+cflags = ["-O2", "-Wall", "-Wextra"]
 libs = ["pthread", "m"]
-# Force specific compiler (optional, defaults to auto-detect)
-compiler = "clang++"
 
 [dependencies]
-# 1. Git Dependency (Auto download & link)
+# 1. Simple Git (HEAD)
 fmt = "https://github.com/fmtlib/fmt.git"
 
-# 2. System Dependency (Uses pkg-config)
-# Automatically adds include paths and link flags
-gtk4 = { pkg = "gtk4" }
-openssl = { pkg = "openssl" }
+# 2. Pinned Version (Recommended for production)
+json = { git = "https://github.com/nlohmann/json.git", tag = "v3.11.2" }
+# Pin to specific commit hash
+utils = { git = "...", rev = "a1b2c3d4" }
 
-# 3. Complex Git Dependency
-# Build a custom library from source with a specific command
-raylib = { git = "https://github.com/raysan5/raylib.git", build = "make", output = "src/libraylib.a" }
+# 3. System Dependency (pkg-config)
+gtk4 = { pkg = "gtk4" }
+
+# 4. Complex Build (Library with source code)
+# 'output' field tells caxe to link this file.
+# If 'output' is missing, caxe treats it as Header-Only.
+raylib = { git = "...", build = "make", output = "src/libraylib.a" }
 
 [scripts]
-# Run shell commands before or after build
 pre_build = "echo Compiling..."
 post_build = "echo Done!"
 ```
 
 ## 🛠️ Advanced
 
+### Header-Only Libraries
+
+`caxe` is smart. If you add a library like `nlohmann/json` or `fmt` and do not specify an `output` file in `cx.toml`, `caxe` assumes it is a **Header-Only** library. It will add the include paths (`-I`) but will not attempt to link any static library.
+
 ### Environment Variables
 
-`caxe` respects standard environment variables for compiler selection. This is useful for CI/CD or switching compilers without editing `cx.toml`.
+Override the compiler without changing config:
 
 ```bash
-# Linux/Mac
-CXX=clang++-14 cx run
-
 # Windows (PowerShell)
 $env:CXX="g++"; cx run
 ```
 
 ### Unit Testing
 
-No need for complex test runners like GoogleTest for simple projects.
-
-1. Create a `tests/` directory.
-2. Add `.cpp` files (e.g., `tests/test_math.cpp`).
-3. Use standard `assert` or return `0` for success.
-
-```cpp
-#include <cassert>
-int main() {
-    assert(1 + 1 == 2);
-    return 0; // Pass
-}
-```
-
-Run them all with:
+Create a `tests/` directory and add `.cpp` files.
 
 ```bash
 cx test
