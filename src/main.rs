@@ -5,13 +5,14 @@ use inquire::{Select, Text};
 use std::fs;
 use std::path::Path;
 
-mod builder;
+mod build;
+mod cache;
+mod checker;
 mod config;
 mod deps;
+mod lock;
 mod registry;
 mod upgrade;
-mod lock;
-mod cache;
 
 #[derive(Parser)]
 #[command(name = "cx")]
@@ -57,6 +58,7 @@ enum Commands {
     Test,
     Info,
     Fmt,
+    Check,
     Update,
     Upgrade,
     Search {
@@ -100,15 +102,15 @@ fn main() -> Result<()> {
         }
 
         Commands::Build { release } => {
-            let config = builder::load_config()?;
-            builder::build_project(&config, *release).map(|_| ())
+            let config = build::load_config()?;
+            build::build_project(&config, *release).map(|_| ())
         }
 
-        Commands::Run { release, args } => builder::build_and_run(*release, args),
+        Commands::Run { release, args } => build::build_and_run(*release, args),
 
-        Commands::Watch => builder::watch(),
-        Commands::Clean => builder::clean(),
-        Commands::Test => builder::run_tests(),
+        Commands::Watch => build::watch(),
+        Commands::Clean => build::clean(),
+        Commands::Test => build::run_tests(),
         Commands::Add {
             lib,
             tag,
@@ -117,7 +119,8 @@ fn main() -> Result<()> {
         } => deps::add_dependency(lib, tag.clone(), branch.clone(), rev.clone()),
         Commands::Remove { lib } => deps::remove_dependency(lib),
         Commands::Info => print_info(),
-        Commands::Fmt => builder::format_code(),
+        Commands::Fmt => checker::format_code(),
+        Commands::Check => checker::check_code(),
         Commands::Update => deps::update_dependencies(),
         Commands::Upgrade => upgrade::check_and_upgrade(),
         Commands::Init => init_project(),
@@ -132,40 +135,52 @@ fn main() -> Result<()> {
 fn init_project() -> Result<()> {
     // 1. Check existing
     if Path::new("cx.toml").exists() {
-        println!("{} Error: Project already initialized (cx.toml exists).", "x".red());
+        println!(
+            "{} Error: Project already initialized (cx.toml exists).",
+            "x".red()
+        );
         return Ok(());
     }
 
     // 2. Interactive Inputs
     let current_dir = std::env::current_dir()?;
-    let dir_name = current_dir.file_name().unwrap_or_default().to_string_lossy();
+    let dir_name = current_dir
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
 
     let name = Text::new("Project name?")
-            .with_default(&dir_name)
-            .prompt()?;
-    
+        .with_default(&dir_name)
+        .prompt()?;
+
     let lang = Select::new("Language?", vec!["cpp", "c"]).prompt()?;
     let template = Select::new("Template?", vec!["console", "web", "raylib"]).prompt()?;
 
     let (toml_content, main_code) = get_template(&name, lang, template);
-    
+
     fs::write("cx.toml", toml_content)?;
-    
+
     // Create src if generic template
     if !Path::new("src").exists() {
         fs::create_dir("src")?;
         let ext = if lang == "c" { "c" } else { "cpp" };
         fs::write(Path::new("src").join(format!("main.{}", ext)), main_code)?;
     } else {
-         println!("{} 'src' directory exists, skipping main file creation.", "!".yellow());
+        println!(
+            "{} 'src' directory exists, skipping main file creation.",
+            "!".yellow()
+        );
     }
-    
+
     // Write .gitignore if not exists
     if !Path::new(".gitignore").exists() {
         fs::write(".gitignore", "/build\n/compile_commands.json\n")?;
     }
 
-    println!("{} Initialized caxe project in current directory.", "✓".green());
+    println!(
+        "{} Initialized caxe project in current directory.",
+        "✓".green()
+    );
     Ok(())
 }
 

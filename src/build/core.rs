@@ -1,71 +1,16 @@
+use super::utils::{get_compiler, load_config, run_script};
 use crate::config::CxConfig;
 use crate::deps;
 use anyhow::{Context, Result};
 use colored::*;
-use notify::{Config, RecursiveMode, Watcher};
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::mpsc::channel;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use walkdir::WalkDir;
-
-// --- Helper: Load Config Once ---
-pub fn load_config() -> Result<CxConfig> {
-    if !Path::new("cx.toml").exists() {
-        return Err(anyhow::anyhow!("cx.toml not found"));
-    }
-    let config_str = fs::read_to_string("cx.toml")?;
-    toml::from_str(&config_str).context("Failed to parse cx.toml")
-}
-
-// --- Helper: Get Compiler ---
-fn get_compiler(config: &CxConfig, has_cpp: bool) -> String {
-    if let Some(build) = &config.build {
-        if let Some(compiler) = &build.compiler {
-            return compiler.clone();
-        }
-    }
-
-    if has_cpp {
-        if let Ok(env_cxx) = std::env::var("CXX") {
-            return env_cxx;
-        }
-    } else {
-        if let Ok(env_cc) = std::env::var("CC") {
-            return env_cc;
-        }
-    }
-
-    if has_cpp {
-        "clang++".to_string()
-    } else {
-        "clang".to_string()
-    }
-}
-
-// --- Helper: Run Script (Cross Platform) ---
-fn run_script(script: &str, project_dir: &Path) -> Result<()> {
-    println!("   {} Running script: '{}'...", "📜".magenta(), script);
-    let status = if cfg!(target_os = "windows") {
-        Command::new("cmd")
-            .args(&["/C", script])
-            .current_dir(project_dir)
-            .status()?
-    } else {
-        Command::new("sh")
-            .args(&["-c", script])
-            .current_dir(project_dir)
-            .status()?
-    };
-
-    if !status.success() {
-        return Err(anyhow::anyhow!("Script failed"));
-    }
-    Ok(())
-}
 
 // --- CORE: Build Project ---
 pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
@@ -140,6 +85,15 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     let current_dir_str = current_dir.to_string_lossy().to_string();
 
     // 5. Parallel Compilation (Lock-Free Optimization)
+    let spinner_style = ProgressStyle::default_spinner()
+        .template("{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+        .unwrap()
+        .progress_chars("#>-");
+
+    let pb = ProgressBar::new(source_files.len() as u64);
+    pb.set_style(spinner_style);
+    pb.set_message("Compiling...");
+
     let results: Vec<(PathBuf, serde_json::Value)> = source_files
         .par_iter()
         .map(|src_path| -> Result<(PathBuf, serde_json::Value)> {
@@ -149,6 +103,10 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
             // Construct Arguments
             let mut args = Vec::new();
             args.push(compiler.clone());
+
+            // Force colors
+            args.push("-fdiagnostics-color=always".to_string());
+
             args.push("-c".to_string());
             args.push(src_path.to_string_lossy().to_string());
             args.push("-o".to_string());
@@ -186,25 +144,40 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
             };
 
             if needs_compile {
+                pb.set_message(format!("Compiling {}", stem));
                 let mut cmd = Command::new(&args[0]);
                 cmd.args(&args[1..]);
                 let output = cmd.output().context("Failed to execute compiler")?;
 
                 if !output.status.success() {
                     let err_msg = String::from_utf8_lossy(&output.stderr).to_string();
-                    println!(
+                    pb.println(format!(
                         "{} Error compiling {}:\n{}",
                         "x".red(),
                         src_path.display(),
                         err_msg
-                    );
+                    ));
                     return Err(anyhow::anyhow!("Compilation failed"));
+                } else {
+                    // Print warnings if any (buffered)
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    if !stderr.is_empty() {
+                        pb.println(format!(
+                            "{} Warning in {}:\n{}",
+                            "!".yellow(),
+                            src_path.display(),
+                            stderr
+                        ));
+                    }
                 }
             }
 
+            pb.inc(1);
             Ok((obj_path, entry))
         })
         .collect::<Result<Vec<_>>>()?; // Collects errors if any
+
+    pb.finish_with_message("Compilation complete");
 
     // Unzip results separate object files and JSON entries
     let (object_files, json_entries): (Vec<PathBuf>, Vec<serde_json::Value>) =
@@ -302,205 +275,5 @@ pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
     run_cmd.args(run_args);
     let _ = run_cmd.status();
 
-    Ok(())
-}
-
-// --- COMMAND: Watch ---
-pub fn watch() -> Result<()> {
-    println!("{} Watching for changes in src/...", "👀".cyan());
-    let (tx, rx) = channel();
-    let config_notify = Config::default().with_poll_interval(Duration::from_secs(1));
-    let mut watcher = notify::RecommendedWatcher::new(tx, config_notify)?;
-
-    watcher.watch(Path::new("src"), RecursiveMode::Recursive)?;
-
-    // First run
-    run_and_clear();
-
-    while let Ok(_) = rx.recv() {
-        // Debounce simple
-        std::thread::sleep(Duration::from_millis(100));
-        while let Ok(_) = rx.try_recv() {}
-        run_and_clear();
-    }
-    Ok(())
-}
-
-fn run_and_clear() {
-    print!("\x1B[2J\x1B[1;1H");
-    println!("{} File changed. Rebuilding...", "🔄".yellow());
-    if let Err(e) = build_and_run(false, &[]) {
-        println!("{} Error: {}", "x".red(), e);
-    }
-}
-
-// --- COMMAND: Clean ---
-pub fn clean() -> Result<()> {
-    let mut cleaned = false;
-
-    if Path::new("build").exists() {
-        fs::remove_dir_all("build").context("Failed to remove build directory")?;
-        cleaned = true;
-    }
-
-    if Path::new("compile_commands.json").exists() {
-        fs::remove_file("compile_commands.json").context("Failed to remove compile commands")?;
-        cleaned = true;
-    }
-
-    if cleaned {
-        println!(
-            "{} Project cleaned (build/ & metadata removed)",
-            "✓".green()
-        );
-    } else {
-        println!("{} Nothing to clean", "!".yellow());
-    }
-    Ok(())
-}
-
-// --- COMMAND: Run Tests ---
-pub fn run_tests() -> Result<()> {
-    let test_dir = Path::new("tests");
-    if !test_dir.exists() {
-        println!("{} No tests/ directory found.", "!".yellow());
-        return Ok(());
-    }
-
-    // Load config or default
-    let config = load_config().unwrap_or_else(|_| CxConfig {
-        package: crate::config::PackageConfig {
-            name: "test_runner".into(),
-            version: "0.0.0".into(),
-            edition: "c++20".into(),
-        },
-        ..Default::default()
-    });
-
-    let mut include_flags = Vec::new();
-    let mut dep_libs = Vec::new();
-
-    if let Some(deps) = &config.dependencies {
-        if !deps.is_empty() {
-            let (incs, libs) = deps::fetch_dependencies(deps)?;
-            include_flags = incs;
-            dep_libs = libs;
-        }
-    }
-
-    println!("{} Running tests...", "🧪".magenta());
-    fs::create_dir_all("build/tests")?;
-
-    let mut total_tests = 0;
-    let mut passed_tests = 0;
-
-    for entry in WalkDir::new("tests").into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let is_cpp = path.extension().map_or(false, |ext| {
-            ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap())
-        });
-        let is_c = path.extension().map_or(false, |ext| ext == "c");
-
-        if is_cpp || is_c {
-            total_tests += 1;
-            let test_name = path.file_stem().unwrap().to_string_lossy();
-            let output_bin = format!("build/tests/{}", test_name);
-
-            print!("   TEST {} ... ", test_name.bold());
-
-            let compiler = get_compiler(&config, is_cpp);
-            let mut cmd = Command::new(compiler);
-            cmd.arg(path);
-            cmd.arg("-o").arg(&output_bin);
-            cmd.arg(format!("-std={}", config.package.edition));
-
-            if let Some(build_cfg) = &config.build {
-                if let Some(flags) = &build_cfg.cflags {
-                    cmd.args(flags);
-                }
-            }
-
-            cmd.args(&include_flags);
-            cmd.args(&dep_libs);
-
-            if let Some(build_cfg) = &config.build {
-                if let Some(libs) = &build_cfg.libs {
-                    for lib in libs {
-                        cmd.arg(format!("-l{}", lib));
-                    }
-                }
-            }
-
-            let output = cmd.output();
-            if output.is_err() || !output.as_ref().unwrap().status.success() {
-                println!("{}", "COMPILE FAIL".red());
-                if let Ok(out) = output {
-                    println!("{}", String::from_utf8_lossy(&out.stderr));
-                }
-                continue;
-            }
-
-            let run_path = format!("./{}", output_bin);
-            let run_status = Command::new(&run_path).status();
-
-            match run_status {
-                Ok(status) => {
-                    if status.success() {
-                        println!("{}", "PASS".green());
-                        passed_tests += 1;
-                    } else {
-                        println!("{}", "FAIL".red());
-                    }
-                }
-                Err(_) => println!("{}", "EXEC FAIL".red()),
-            }
-        }
-    }
-
-    println!("\nTest Result: {}/{} passed.", passed_tests, total_tests);
-    if total_tests > 0 && passed_tests == total_tests {
-        println!("{}", "ALL TESTS PASSED ✨".green().bold());
-    } else if total_tests > 0 {
-        println!("{}", "SOME TESTS FAILED 💀".red().bold());
-    }
-
-    Ok(())
-}
-
-pub fn format_code() -> Result<()> {
-    if Command::new("clang-format")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        println!(
-            "{} clang-format not found. Please install it first.",
-            "x".red()
-        );
-        return Ok(());
-    }
-
-    println!("{} Formatting source code...", "🎨".magenta());
-
-    let mut count = 0;
-    for entry in WalkDir::new("src").into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            let s = ext.to_string_lossy();
-            if ["cpp", "hpp", "c", "h", "cc", "cxx"].contains(&s.as_ref()) {
-                let status = Command::new("clang-format")
-                    .arg("-i")
-                    .arg("-style=file")
-                    .arg(path)
-                    .status()?;
-
-                if status.success() {
-                    count += 1;
-                }
-            }
-        }
-    }
-
-    println!("{} Formatted {} files.", "✓".green(), count);
     Ok(())
 }
