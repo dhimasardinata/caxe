@@ -239,7 +239,12 @@ pub fn add_dependency(
     }
 
     // 1. Parse Input (Short format vs URL)
-    let (name, url) = if lib_input.contains("http") || lib_input.contains("git@") {
+    // 1. Parse Input (Alias -> Short format -> URL)
+    let (name, url) = if let Some(resolved_url) = crate::registry::resolve_alias(lib_input) {
+        // Case A: Alias found (e.g. "raylib")
+        (lib_input.to_string(), resolved_url)
+    } else if lib_input.contains("http") || lib_input.contains("git@") {
+        // Case B: Direct URL
         let name = lib_input
             .split('/')
             .last()
@@ -247,9 +252,10 @@ pub fn add_dependency(
             .replace(".git", "");
         (name, lib_input.to_string())
     } else {
+        // Case C: user/repo
         let parts: Vec<&str> = lib_input.split('/').collect();
         if parts.len() != 2 {
-            println!("{} Invalid format. Use 'user/repo' or full URL.", "x".red());
+            println!("{} Invalid format. Use 'alias', 'user/repo', or full URL.", "x".red());
             return Ok(());
         }
         let name = parts[1].to_string();

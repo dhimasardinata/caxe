@@ -26,21 +26,27 @@ It provides a unified workflow for scaffolding, building, testing, formatting, a
 
 ## 📦 Installation
 
-### Option 1: Download Binary (Recommended)
+### Automatic Script (Recommended)
 
-No Rust or Cargo required. Download the latest release for your OS:
+**Windows (PowerShell)**:
+```powershell
+iwr https://raw.githubusercontent.com/dhimasardinata/caxe/main/install.ps1 -useb | iex
+```
 
-- **Windows**: [Download cx-windows.exe](https://github.com/dhimasardinata/caxe/releases/latest)
-- **Linux**: [Download cx-linux](https://github.com/dhimasardinata/caxe/releases/latest)
-- **macOS**: [Download cx-macos](https://github.com/dhimasardinata/caxe/releases/latest)
-
-> **Tip:** Rename the binary to `cx` (or `cx.exe`) and add it to your system PATH.
+**Unix (Linux/macOS)**:
+```bash
+curl -fsSL https://raw.githubusercontent.com/dhimasardinata/caxe/main/install.sh | sh
+```
 
 ### Option 2: Install via Cargo
 
 ```bash
 cargo install caxe
 ```
+
+### Option 3: Manual Download
+
+Download the latest binary from [Releases](https://github.com/dhimasardinata/caxe/releases/latest) and add it to your PATH.
 
 ## 🚀 Quick Start
 
@@ -94,6 +100,7 @@ Compiles the project without running it.
 
 Adds a Git dependency to `cx.toml`. Supports version pinning.
 
+- **Alias (New!)**: `cx add raylib` (No URL needed!)
 - **Standard**: `cx add nlohmann/json`
 - **Tag**: `cx add nlohmann/json --tag v3.11.2`
 - **Branch**: `cx add raysan5/raylib --branch master`

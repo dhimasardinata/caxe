@@ -8,6 +8,7 @@ use std::path::Path;
 mod builder;
 mod config;
 mod deps;
+mod registry;
 
 #[derive(Parser)]
 #[command(name = "cx")]
