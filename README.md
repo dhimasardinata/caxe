@@ -130,6 +130,29 @@ Watches for file changes and auto-runs.
 
 Compiles and runs files in `tests/` directory.
 
+### `cx search <query>`
+**_New!_** Search for libraries in the official registry.
+```bash
+cx search raylib
+# Output: raylib - https://github.com/raysan5/raylib.git
+```
+
+### `cx lock` & Reproducibility
+**_New!_** caxe automatically generates a `cx.lock` file to pin dependencies to exact commits.
+- Run `cx update` to ignore the lockfile and fetch the latest versions.
+
+### `cx init`
+**_New!_** Initialize a caxe project in an existing directory.
+
+### `cx cache <clean|ls|path>`
+**_New!_** Manage the global library cache.
+- `clean`: Wipe all cached libraries.
+- `ls`: List cached libraries.
+- `path`: Show cache directory path.
+
+### `cx upgrade`
+**_New!_** Self-update caxe to the latest version.
+
 ### `cx info`
 
 Displays diagnostic information (OS, Cache Path, Compilers).
