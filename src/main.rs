@@ -9,6 +9,7 @@ mod builder;
 mod config;
 mod deps;
 mod registry;
+mod upgrade;
 
 #[derive(Parser)]
 #[command(name = "cx")]
@@ -55,6 +56,7 @@ enum Commands {
     Info,
     Fmt,
     Update,
+    Upgrade,
 }
 
 fn main() -> Result<()> {
@@ -87,6 +89,7 @@ fn main() -> Result<()> {
         Commands::Info => print_info(),
         Commands::Fmt => builder::format_code(),
         Commands::Update => deps::update_dependencies(),
+        Commands::Upgrade => upgrade::check_and_upgrade(),
     }
 }
 

@@ -1,0 +1,16 @@
+{
+    "raylib": "https://github.com/raysan5/raylib.git",
+    "sdl2": "https://github.com/libsdl-org/SDL.git",
+    "sfml": "https://github.com/SFML/SFML.git",
+    "json": "https://github.com/nlohmann/json.git",
+    "nlohmann_json": "https://github.com/nlohmann/json.git",
+    "fmt": "https://github.com/fmtlib/fmt.git",
+    "spdlog": "https://github.com/gabime/spdlog.git",
+    "mongoose": "https://github.com/cesanta/mongoose.git",
+    "httplib": "https://github.com/yhirose/cpp-httplib.git",
+    "cpp-httplib": "https://github.com/yhirose/cpp-httplib.git",
+    "cpr": "https://github.com/libcpr/cpr.git",
+    "catch2": "https://github.com/catchorg/Catch2.git",
+    "doctest": "https://github.com/doctest/doctest.git",
+    "gtest": "https://github.com/google/googletest.git"
+}
