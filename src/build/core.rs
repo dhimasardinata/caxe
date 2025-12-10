@@ -12,6 +12,36 @@ use std::process::Command;
 use std::time::Instant;
 use walkdir::WalkDir;
 
+// --- Helper: Check Dependencies (.d file) ---
+fn check_dependencies(obj_path: &Path) -> Result<bool> {
+    let d_path = obj_path.with_extension("d");
+    if !d_path.exists() {
+        return Ok(true); // No dependency file, force recompile
+    }
+
+    let dep_content = fs::read_to_string(&d_path)?;
+    // Handle line continuations
+    let content_flat = dep_content.replace("\\\n", " ").replace("\\\r\n", " ");
+
+    // Format is usually: "objfile.o: src.c header.h ..."
+    if let Some(deps_part) = content_flat.split_once(':') {
+        let deps_str = deps_part.1;
+        let obj_mtime = fs::metadata(obj_path)?.modified()?;
+
+        for dep in deps_str.split_whitespace() {
+            let dep_path = Path::new(dep);
+            if dep_path.exists() {
+                let dep_mtime = fs::metadata(dep_path)?.modified()?;
+                if dep_mtime > obj_mtime {
+                    return Ok(true); // Dependency is newer
+                }
+            }
+        }
+    }
+
+    Ok(false) // Up to date
+}
+
 // --- CORE: Build Project ---
 pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     let start_time = Instant::now();
@@ -113,6 +143,11 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
             args.push(obj_path.to_string_lossy().to_string());
             args.push(format!("-std={}", config.package.edition));
 
+            // Generate Dependency File
+            args.push("-MMD".to_string());
+            args.push("-MF".to_string());
+            args.push(obj_path.with_extension("d").to_string_lossy().to_string());
+
             if release {
                 args.push("-O3".to_string());
             } else {
@@ -138,9 +173,10 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
             let needs_compile = if !obj_path.exists() {
                 true
             } else {
-                let src_time = fs::metadata(src_path)?.modified()?;
-                let obj_time = fs::metadata(&obj_path)?.modified()?;
-                src_time > obj_time
+                match check_dependencies(&obj_path) {
+                    Ok(needs) => needs,
+                    Err(_) => true, // On error (e.g. read failure), safe to recompile
+                }
             };
 
             if needs_compile {
