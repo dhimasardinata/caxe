@@ -7,6 +7,13 @@ pub struct CxConfig {
     pub dependencies: Option<HashMap<String, Dependency>>,
     pub build: Option<BuildConfig>,
     pub scripts: Option<ScriptsConfig>,
+    pub test: Option<TestConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Default)]
+pub struct TestConfig {
+    pub framework: Option<String>,
+    pub source_dir: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

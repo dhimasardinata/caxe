@@ -78,12 +78,15 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     let output_bin = build_dir.join(&bin_name);
 
     // 3. Fetch Dependencies
-    let mut include_flags = Vec::new();
+    let mut include_paths = Vec::new();
+    let mut extra_cflags = Vec::new();
     let mut dep_libs = Vec::new();
+
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
-            let (incs, libs) = deps::fetch_dependencies(deps)?;
-            include_flags = incs;
+            let (paths, cflags, libs) = deps::fetch_dependencies(deps)?;
+            include_paths = paths;
+            extra_cflags = cflags;
             dep_libs = libs;
         }
     }
@@ -111,8 +114,19 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     }
 
     let compiler = get_compiler(config, has_cpp);
-    let common_flags = include_flags.clone();
+    let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
     let current_dir_str = current_dir.to_string_lossy().to_string();
+
+    // Prepare Common Flags (Includes)
+    let mut common_flags = Vec::new();
+    for path in &include_paths {
+        if is_msvc {
+            common_flags.push(format!("/I{}", path.display()));
+        } else {
+            common_flags.push(format!("-I{}", path.display()));
+        }
+    }
+    common_flags.extend(extra_cflags.clone());
 
     // 5. Parallel Compilation (Lock-Free Optimization)
     let spinner_style = ProgressStyle::default_spinner()
@@ -134,25 +148,45 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
             let mut args = Vec::new();
             args.push(compiler.clone());
 
-            // Force colors
-            args.push("-fdiagnostics-color=always".to_string());
+            if is_msvc {
+                // MSVC Flags
+                args.push("/nologo".to_string()); // Suppress copyright
+                args.push("/c".to_string());
+                args.push("/EHsc".to_string()); // Standard C++ exceptions
+                args.push(src_path.to_string_lossy().to_string());
+                args.push(format!("/Fo{}", obj_path.to_string_lossy()));
+                args.push(format!("/std:{}", config.package.edition));
 
-            args.push("-c".to_string());
-            args.push(src_path.to_string_lossy().to_string());
-            args.push("-o".to_string());
-            args.push(obj_path.to_string_lossy().to_string());
-            args.push(format!("-std={}", config.package.edition));
+                // TODO: Recursive Header Tracking for MSVC (/sourceDependencies)
+            } else {
+                // GCC/Clang Flags
+                args.push("-fdiagnostics-color=always".to_string());
+                args.push("-c".to_string());
+                args.push(src_path.to_string_lossy().to_string());
+                args.push("-o".to_string());
+                args.push(obj_path.to_string_lossy().to_string());
+                args.push(format!("-std={}", config.package.edition));
 
-            // Generate Dependency File
-            args.push("-MMD".to_string());
-            args.push("-MF".to_string());
-            args.push(obj_path.with_extension("d").to_string_lossy().to_string());
+                // Generate Dependency File
+                args.push("-MMD".to_string());
+                args.push("-MF".to_string());
+                args.push(obj_path.with_extension("d").to_string_lossy().to_string());
+            }
 
             if release {
-                args.push("-O3".to_string());
+                if is_msvc {
+                    args.push("/O2".to_string());
+                } else {
+                    args.push("-O3".to_string());
+                }
             } else {
-                args.push("-g".to_string());
-                args.push("-Wall".to_string());
+                if is_msvc {
+                    args.push("/Z7".to_string()); // Debug info
+                    args.push("/W4".to_string());
+                } else {
+                    args.push("-g".to_string());
+                    args.push("-Wall".to_string());
+                }
             }
 
             if let Some(build_cfg) = &config.build {

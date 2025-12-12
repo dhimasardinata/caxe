@@ -9,12 +9,6 @@ use std::process::Command;
 use walkdir::WalkDir;
 
 pub fn run_tests() -> Result<()> {
-    let test_dir = Path::new("tests");
-    if !test_dir.exists() {
-        println!("{} No tests/ directory found.", "!".yellow());
-        return Ok(());
-    }
-
     // Load config or default
     let config = load_config().unwrap_or_else(|_| CxConfig {
         package: crate::config::PackageConfig {
@@ -25,13 +19,27 @@ pub fn run_tests() -> Result<()> {
         ..Default::default()
     });
 
-    let mut include_flags = Vec::new();
+    let test_dir_str = config
+        .test
+        .as_ref()
+        .and_then(|t| t.source_dir.clone())
+        .unwrap_or_else(|| "tests".to_string());
+    let test_dir = Path::new(&test_dir_str);
+
+    if !test_dir.exists() {
+        println!("{} No {}/ directory found.", "!".yellow(), test_dir_str);
+        return Ok(());
+    }
+
+    let mut include_paths = Vec::new();
+    let mut extra_cflags = Vec::new();
     let mut dep_libs = Vec::new();
 
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
-            let (incs, libs) = deps::fetch_dependencies(deps)?;
-            include_flags = incs;
+            let (paths, cflags, libs) = deps::fetch_dependencies(deps)?;
+            include_paths = paths;
+            extra_cflags = cflags;
             dep_libs = libs;
         }
     }
@@ -42,7 +50,7 @@ pub fn run_tests() -> Result<()> {
     let mut total_tests = 0;
     let mut passed_tests = 0;
 
-    for entry in WalkDir::new("tests").into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(test_dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         let is_cpp = path.extension().map_or(false, |ext| {
             ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap())
@@ -57,10 +65,32 @@ pub fn run_tests() -> Result<()> {
             print!("   TEST {} ... ", test_name.bold());
 
             let compiler = get_compiler(&config, is_cpp);
-            let mut cmd = Command::new(compiler);
-            cmd.arg(path);
-            cmd.arg("-o").arg(&output_bin);
-            cmd.arg(format!("-std={}", config.package.edition));
+            let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
+            let mut cmd = Command::new(&compiler);
+
+            if is_msvc {
+                cmd.arg("/nologo");
+                cmd.arg("/EHsc");
+                cmd.arg(path);
+                cmd.arg(format!("/Fe{}", output_bin)); // Output exe name
+                cmd.arg(format!("/std:{}", config.package.edition));
+
+                // Includes
+                for p in &include_paths {
+                    cmd.arg(format!("/I{}", p.display()));
+                }
+            } else {
+                cmd.arg(path);
+                cmd.arg("-o").arg(&output_bin);
+                cmd.arg(format!("-std={}", config.package.edition));
+
+                // Includes
+                for p in &include_paths {
+                    cmd.arg(format!("-I{}", p.display()));
+                }
+            }
+
+            cmd.args(&extra_cflags);
 
             if let Some(build_cfg) = &config.build {
                 if let Some(flags) = &build_cfg.cflags {
@@ -68,13 +98,20 @@ pub fn run_tests() -> Result<()> {
                 }
             }
 
-            cmd.args(&include_flags);
+            // Link Libs
+            if is_msvc {
+                cmd.arg("/link");
+            }
             cmd.args(&dep_libs);
 
             if let Some(build_cfg) = &config.build {
                 if let Some(libs) = &build_cfg.libs {
                     for lib in libs {
-                        cmd.arg(format!("-l{}", lib));
+                        if is_msvc {
+                            cmd.arg(format!("{}.lib", lib));
+                        } else {
+                            cmd.arg(format!("-l{}", lib));
+                        }
                     }
                 }
             }
@@ -88,7 +125,11 @@ pub fn run_tests() -> Result<()> {
                 continue;
             }
 
-            let run_path = format!("./{}", output_bin);
+            let run_path = if cfg!(target_os = "windows") {
+                format!("{}.exe", output_bin)
+            } else {
+                format!("./{}", output_bin)
+            };
             let run_status = Command::new(&run_path).status();
 
             match run_status {

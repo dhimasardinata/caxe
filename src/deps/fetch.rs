@@ -8,16 +8,19 @@ use std::collections::HashMap;
 use std::fs;
 use std::process::Command;
 
+use std::path::PathBuf;
+
 pub fn fetch_dependencies(
     deps: &HashMap<String, Dependency>,
-) -> Result<(Vec<String>, Vec<String>)> {
+) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
     let home_dir = dirs::home_dir().context("Could not find home directory")?;
     let cache_dir = home_dir.join(".cx").join("cache");
     fs::create_dir_all(&cache_dir)?;
 
     let mut lockfile = crate::lock::LockFile::load().unwrap_or_default();
 
-    let mut include_flags = Vec::new();
+    let mut include_paths = Vec::new(); // Pure paths for -I or /I
+    let mut extra_cflags = Vec::new(); // pkg-config flags
     let mut link_flags = Vec::new();
 
     if !deps.is_empty() {
@@ -42,7 +45,7 @@ pub fn fetch_dependencies(
                     let out_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
                     if !out_str.is_empty() {
                         for flag in out_str.split_whitespace() {
-                            include_flags.push(flag.to_string());
+                            extra_cflags.push(flag.to_string());
                         }
                     }
                 }
@@ -230,10 +233,10 @@ pub fn fetch_dependencies(
             }
         }
 
-        // D. Register Includes Flags
-        include_flags.push(format!("-I{}", lib_path.display()));
-        include_flags.push(format!("-I{}/include", lib_path.display()));
-        include_flags.push(format!("-I{}/src", lib_path.display()));
+        // D. Register Includes Flags (Return Paths)
+        include_paths.push(lib_path.clone());
+        include_paths.push(lib_path.join("include"));
+        include_paths.push(lib_path.join("src"));
 
         // E. Smart Linking Logic (Zero Config Header-Only Support)
         if let Some(out_file) = output_file {
@@ -251,5 +254,5 @@ pub fn fetch_dependencies(
     }
 
     lockfile.save()?;
-    Ok((include_flags, link_flags))
+    Ok((include_paths, extra_cflags, link_flags))
 }

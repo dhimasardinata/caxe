@@ -66,8 +66,11 @@ pub fn check_code() -> Result<()> {
     let mut include_flags = Vec::new();
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
-            if let Ok((incs, _)) = deps::fetch_dependencies(deps) {
-                include_flags = incs;
+            if let Ok((paths, cflags, _)) = deps::fetch_dependencies(deps) {
+                for p in paths {
+                    include_flags.push(format!("-I{}", p.display()));
+                }
+                include_flags.extend(cflags);
             }
         }
     }
