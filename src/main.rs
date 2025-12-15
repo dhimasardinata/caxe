@@ -37,10 +37,16 @@ enum Commands {
     Build {
         #[arg(long)]
         release: bool,
+        /// Show detailed build commands and decisions
+        #[arg(short, long)]
+        verbose: bool,
     },
     Run {
         #[arg(long)]
         release: bool,
+        /// Show detailed build commands and decisions
+        #[arg(short, long)]
+        verbose: bool,
         #[arg(last = true)]
         args: Vec<String>,
     },
@@ -122,12 +128,16 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Build { release } => {
+        Commands::Build { release, verbose } => {
             let config = build::load_config()?;
-            build::build_project(&config, *release).map(|_| ())
+            build::build_project(&config, *release, *verbose).map(|_| ())
         }
 
-        Commands::Run { release, args } => build::build_and_run(*release, args),
+        Commands::Run {
+            release,
+            verbose,
+            args,
+        } => build::build_and_run(*release, *verbose, args),
 
         Commands::Watch => build::watch(),
         Commands::Clean => build::clean(),

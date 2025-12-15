@@ -88,14 +88,19 @@ Creates a new project.
 
 ### `cx run`
 
+
 Compiles and runs the project.
 
 - `--release` : Enable optimizations (`-O3`).
+- `-v, --verbose` : Show detailed build commands and decisions.
 - `-- <args>` : Pass arguments to your executable.
 
 ### `cx build`
 
 Compiles the project without running it.
+
+- `--release` : Enable optimizations.
+- `-v, --verbose` : Show detailed build commands and decisions.
 
 ### `cx add <lib>`
 

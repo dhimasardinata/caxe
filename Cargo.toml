@@ -1,6 +1,6 @@
 [package]
 name = "caxe"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2024"
 description = "A modern C/C++ project manager that cuts through build system complexity. Zero config, smart dependencies, and parallel builds."
 authors = ["Dhimas Ardinata dhimasardinatapp@gmail.com"]

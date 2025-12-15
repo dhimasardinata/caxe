@@ -43,13 +43,51 @@ fn check_dependencies(obj_path: &Path) -> Result<bool> {
 }
 
 // --- CORE: Build Project ---
-pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
+pub fn build_project(config: &CxConfig, release: bool, verbose: bool) -> Result<bool> {
     let start_time = Instant::now();
     let current_dir = std::env::current_dir()?;
+
+    // Verbose: Show build configuration
+    if verbose {
+        println!();
+        println!("{}", "═".repeat(60).dimmed());
+        println!("{}", "VERBOSE BUILD OUTPUT".bold().cyan());
+        println!("{}", "═".repeat(60).dimmed());
+        println!();
+        println!("{}", "Build Configuration:".bold());
+        println!(
+            "  Package: {} v{}",
+            config.package.name.cyan(),
+            config.package.version
+        );
+        println!(
+            "  Profile: {}",
+            if release {
+                "release".green()
+            } else {
+                "debug".yellow()
+            }
+        );
+        let edition_str = if config.package.edition.is_empty() {
+            "c++17"
+        } else {
+            &config.package.edition
+        };
+        println!("  Edition: {}", edition_str);
+        if let Some(build_cfg) = &config.build {
+            if let Some(compiler) = &build_cfg.compiler {
+                println!("  Compiler Override: {}", compiler.cyan());
+            }
+        }
+        println!();
+    }
 
     // 1. Pre-build Script
     if let Some(scripts) = &config.scripts {
         if let Some(pre) = &scripts.pre_build {
+            if verbose {
+                println!("{} Running pre-build script: {}", "→".blue(), pre);
+            }
             if let Err(e) = run_script(pre, &current_dir) {
                 println!("{} Pre-build script failed: {}", "x".red(), e);
                 return Ok(false);
@@ -76,6 +114,13 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     };
 
     let output_bin = build_dir.join(&bin_name);
+
+    if verbose {
+        println!("{}", "Paths:".bold());
+        println!("  Output: {}", output_bin.display().to_string().cyan());
+        println!("  Objects: {}", obj_dir.display().to_string().dimmed());
+        println!();
+    }
 
     // 3. Fetch Dependencies
     let mut include_paths = Vec::new();
@@ -123,6 +168,29 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
     let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
     let current_dir_str = current_dir.to_string_lossy().to_string();
 
+    // Verbose: Show toolchain info
+    if verbose {
+        println!("{}", "Toolchain:".bold());
+        println!("  Compiler: {}", compiler.cyan());
+        println!(
+            "  Type: {}",
+            if is_msvc {
+                "MSVC".yellow()
+            } else {
+                "GCC/Clang".green()
+            }
+        );
+        if let Some(ref tc) = toolchain {
+            println!("  Source: Detected via vswhere/explicit config");
+            if !tc.env_vars.is_empty() {
+                println!("  Env vars: {} injected", tc.env_vars.len());
+            }
+        } else {
+            println!("  Source: PATH fallback");
+        }
+        println!();
+    }
+
     // Clone env_vars for use in parallel compilation
     let toolchain_env: std::collections::HashMap<String, String> = toolchain
         .as_ref()
@@ -139,6 +207,15 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
         }
     }
     common_flags.extend(extra_cflags.clone());
+
+    // Verbose: Show include paths and flags
+    if verbose && !include_paths.is_empty() {
+        println!("{}", "Include Paths:".bold());
+        for path in &include_paths {
+            println!("  -I {}", path.display().to_string().dimmed());
+        }
+        println!();
+    }
 
     // 5. Parallel Compilation (Lock-Free Optimization)
     let spinner_style = ProgressStyle::default_spinner()
@@ -402,11 +479,11 @@ pub fn build_project(config: &CxConfig, release: bool) -> Result<bool> {
 }
 
 // --- COMMAND: Build & Run ---
-pub fn build_and_run(release: bool, run_args: &[String]) -> Result<()> {
+pub fn build_and_run(release: bool, verbose: bool, run_args: &[String]) -> Result<()> {
     // Load config once here
     let config = load_config()?;
 
-    let success = build_project(&config, release)?;
+    let success = build_project(&config, release, verbose)?;
     if !success {
         return Ok(());
     }
