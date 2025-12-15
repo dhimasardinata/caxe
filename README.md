@@ -93,6 +93,7 @@ Compiles and runs the project.
 
 - `--release` : Enable optimizations (`-O3`).
 - `-v, --verbose` : Show detailed build commands and decisions.
+- `--dry-run` : Preview commands without executing (shows compile/link commands).
 - `-- <args>` : Pass arguments to your executable.
 
 ### `cx build`
@@ -101,6 +102,7 @@ Compiles the project without running it.
 
 - `--release` : Enable optimizations.
 - `-v, --verbose` : Show detailed build commands and decisions.
+- `--dry-run` : Preview commands without executing.
 
 ### `cx add <lib>`
 

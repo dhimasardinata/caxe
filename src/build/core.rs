@@ -43,42 +43,63 @@ fn check_dependencies(obj_path: &Path) -> Result<bool> {
 }
 
 // --- CORE: Build Project ---
-pub fn build_project(config: &CxConfig, release: bool, verbose: bool) -> Result<bool> {
+pub fn build_project(
+    config: &CxConfig,
+    release: bool,
+    verbose: bool,
+    dry_run: bool,
+) -> Result<bool> {
     let start_time = Instant::now();
     let current_dir = std::env::current_dir()?;
 
-    // Verbose: Show build configuration
-    if verbose {
-        println!();
-        println!("{}", "═".repeat(60).dimmed());
-        println!("{}", "VERBOSE BUILD OUTPUT".bold().cyan());
-        println!("{}", "═".repeat(60).dimmed());
-        println!();
-        println!("{}", "Build Configuration:".bold());
-        println!(
-            "  Package: {} v{}",
-            config.package.name.cyan(),
-            config.package.version
-        );
-        println!(
-            "  Profile: {}",
-            if release {
-                "release".green()
-            } else {
-                "debug".yellow()
-            }
-        );
+    // Dry-run or Verbose header with modern box styling
+    let show_details = verbose || dry_run;
+
+    if show_details {
         let edition_str = if config.package.edition.is_empty() {
             "c++17"
         } else {
             &config.package.edition
         };
-        println!("  Edition: {}", edition_str);
-        if let Some(build_cfg) = &config.build {
-            if let Some(compiler) = &build_cfg.compiler {
-                println!("  Compiler Override: {}", compiler.cyan());
-            }
+        let profile_str = if release { "release" } else { "debug" };
+        let compiler_str = config
+            .build
+            .as_ref()
+            .and_then(|b| b.compiler.as_ref())
+            .map(|s| s.as_str())
+            .unwrap_or("auto");
+
+        println!();
+        if dry_run {
+            println!("╭────────────────────────────────────────╮");
+            println!("│  {} {:<30} │", "🔍".yellow(), "DRY RUN".bold().yellow());
+        } else {
+            println!("╭────────────────────────────────────────╮");
+            println!("│  {} {:<30} │", "🔧".cyan(), "BUILD".bold().cyan());
         }
+        println!("├────────────────────────────────────────┤");
+        println!(
+            "│  {:<10} {} v{:<19} │",
+            "Package".dimmed(),
+            config.package.name.cyan(),
+            config.package.version
+        );
+        println!(
+            "│  {:<10} {:<27} │",
+            "Profile".dimmed(),
+            if release {
+                profile_str.green().to_string()
+            } else {
+                profile_str.yellow().to_string()
+            }
+        );
+        println!("│  {:<10} {:<27} │", "Edition".dimmed(), edition_str);
+        println!(
+            "│  {:<10} {:<27} │",
+            "Compiler".dimmed(),
+            compiler_str.cyan()
+        );
+        println!("╰────────────────────────────────────────╯");
         println!();
     }
 
@@ -217,7 +238,75 @@ pub fn build_project(config: &CxConfig, release: bool, verbose: bool) -> Result<
         println!();
     }
 
-    // 5. Parallel Compilation (Lock-Free Optimization)
+    // 5. Dry-run: Show compile commands that would be executed
+    if dry_run {
+        println!("{}", "Compile:".bold());
+        for src_path in &source_files {
+            let stem = src_path
+                .file_stem()
+                .unwrap_or(src_path.as_os_str())
+                .to_string_lossy();
+            let obj_ext = if is_msvc { "obj" } else { "o" };
+            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+
+            // Shorter, cleaner format
+            let short_compiler = Path::new(&compiler)
+                .file_name()
+                .unwrap_or(compiler.as_ref())
+                .to_string_lossy();
+
+            let cmd = if is_msvc {
+                format!(
+                    "  → {} -c {} → {}",
+                    short_compiler,
+                    src_path.display(),
+                    obj_path
+                        .file_name()
+                        .unwrap_or(obj_path.as_os_str())
+                        .to_string_lossy()
+                )
+            } else {
+                format!(
+                    "  → {} -c {} → {}",
+                    short_compiler,
+                    src_path.display(),
+                    obj_path
+                        .file_name()
+                        .unwrap_or(obj_path.as_os_str())
+                        .to_string_lossy()
+                )
+            };
+            println!("{}", cmd.dimmed());
+        }
+
+        // Show link command
+        println!("\n{}", "Link:".bold());
+        let short_compiler = Path::new(&compiler)
+            .file_name()
+            .unwrap_or(compiler.as_ref())
+            .to_string_lossy();
+        let obj_count = source_files.len();
+        let bin_name = output_bin
+            .file_name()
+            .unwrap_or(output_bin.as_os_str())
+            .to_string_lossy();
+        println!(
+            "  → {} [{} object(s)] → {}",
+            short_compiler,
+            obj_count,
+            bin_name.cyan()
+        );
+
+        // Modern footer
+        println!();
+        println!("╭────────────────────────────────────────╮");
+        println!("│  {} {:<30} │", "✓".green(), "Dry run complete");
+        println!("│  {:<38} │", "No commands were executed".dimmed());
+        println!("╰────────────────────────────────────────╯");
+        return Ok(true);
+    }
+
+    // 6. Parallel Compilation (Lock-Free Optimization)
     let spinner_style = ProgressStyle::default_spinner()
         .template("{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
         .unwrap()
@@ -479,12 +568,47 @@ pub fn build_project(config: &CxConfig, release: bool, verbose: bool) -> Result<
 }
 
 // --- COMMAND: Build & Run ---
-pub fn build_and_run(release: bool, verbose: bool, run_args: &[String]) -> Result<()> {
+pub fn build_and_run(
+    release: bool,
+    verbose: bool,
+    dry_run: bool,
+    run_args: &[String],
+) -> Result<()> {
     // Load config once here
     let config = load_config()?;
 
-    let success = build_project(&config, release, verbose)?;
+    let success = build_project(&config, release, verbose, dry_run)?;
     if !success {
+        return Ok(());
+    }
+
+    // In dry-run mode, don't actually run
+    if dry_run {
+        println!("\n{}", "Run:".bold());
+        let profile = if release { "release" } else { "debug" };
+        let bin_basename = if let Some(build_cfg) = &config.build {
+            build_cfg.bin.clone().unwrap_or(config.package.name.clone())
+        } else {
+            config.package.name.clone()
+        };
+        let bin_name = if cfg!(target_os = "windows") {
+            format!("{}.exe", bin_basename)
+        } else {
+            bin_basename
+        };
+        let bin_path = Path::new("build").join(profile).join(&bin_name);
+        let bin_short = bin_path
+            .file_name()
+            .unwrap_or(bin_path.as_os_str())
+            .to_string_lossy();
+        let args_str = if run_args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", run_args.join(" "))
+        };
+        println!("  → {}{}", bin_short.cyan(), args_str);
+
+        // Footer (build_project already showed the main one)
         return Ok(());
     }
 

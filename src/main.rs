@@ -40,6 +40,9 @@ enum Commands {
         /// Show detailed build commands and decisions
         #[arg(short, long)]
         verbose: bool,
+        /// Show what would be executed without running
+        #[arg(long)]
+        dry_run: bool,
     },
     Run {
         #[arg(long)]
@@ -47,6 +50,9 @@ enum Commands {
         /// Show detailed build commands and decisions
         #[arg(short, long)]
         verbose: bool,
+        /// Show what would be executed without running
+        #[arg(long)]
+        dry_run: bool,
         #[arg(last = true)]
         args: Vec<String>,
     },
@@ -128,16 +134,21 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Build { release, verbose } => {
+        Commands::Build {
+            release,
+            verbose,
+            dry_run,
+        } => {
             let config = build::load_config()?;
-            build::build_project(&config, *release, *verbose).map(|_| ())
+            build::build_project(&config, *release, *verbose, *dry_run).map(|_| ())
         }
 
         Commands::Run {
             release,
             verbose,
+            dry_run,
             args,
-        } => build::build_and_run(*release, *verbose, args),
+        } => build::build_and_run(*release, *verbose, *dry_run, args),
 
         Commands::Watch => build::watch(),
         Commands::Clean => build::clean(),

@@ -29,7 +29,7 @@ pub fn watch() -> Result<()> {
 fn run_and_clear() {
     print!("\x1B[2J\x1B[1;1H");
     println!("{} File changed. Rebuilding...", "🔄".yellow());
-    if let Err(e) = core::build_and_run(false, false, &[]) {
+    if let Err(e) = core::build_and_run(false, false, false, &[]) {
         println!("{} Error: {}", "x".red(), e);
     }
 }
