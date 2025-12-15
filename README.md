@@ -167,6 +167,12 @@ Displays diagnostic information including:
 - Target ABI (x86_64/x86)
 - Build tools status (CMake, Make, Ninja)
 
+### `cx doctor`
+**_New!_** Diagnose system and project issues.
+- Checks: Toolchain, Build Tools (CMake/Make/Ninja/Git), Project config
+- Shows issues and suggestions for fixing them
+- Great for troubleshooting build problems
+
 ---
 
 ## ⚙️ Configuration (`cx.toml`)

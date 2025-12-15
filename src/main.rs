@@ -78,6 +78,8 @@ enum Commands {
         #[command(subcommand)]
         op: Option<ToolchainOp>,
     },
+    /// Diagnose system and project issues
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -150,6 +152,7 @@ fn main() -> Result<()> {
             CacheOp::Path => cache::print_path(),
         },
         Commands::Toolchain { op } => handle_toolchain_command(op),
+        Commands::Doctor => run_doctor(),
     }
 }
 
@@ -328,13 +331,48 @@ fn print_info() -> Result<()> {
                 None
             };
 
-            // Determine which compiler type is configured
+            // Also check cached toolchain selection from 'cx toolchain'
+            let cached_selection = {
+                let cache_path = dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".cx")
+                    .join("toolchain-selection.toml");
+
+                if cache_path.exists() {
+                    std::fs::read_to_string(&cache_path)
+                        .ok()
+                        .and_then(|content| {
+                            // Parse compiler_type from the cached file
+                            for line in content.lines() {
+                                if line.starts_with("compiler_type") {
+                                    if line.contains("MSVC") {
+                                        return Some(CompilerType::MSVC);
+                                    }
+                                    if line.contains("ClangCL") {
+                                        return Some(CompilerType::ClangCL);
+                                    }
+                                    if line.contains("Clang") {
+                                        return Some(CompilerType::Clang);
+                                    }
+                                    if line.contains("GCC") {
+                                        return Some(CompilerType::GCC);
+                                    }
+                                }
+                            }
+                            None
+                        })
+                } else {
+                    None
+                }
+            };
+
+            // Determine which compiler type is configured (cx.toml takes priority over cached selection)
             let configured_type = match project_compiler.as_deref() {
                 Some("msvc") | Some("cl") | Some("cl.exe") => Some(CompilerType::MSVC),
                 Some("clang-cl") | Some("clangcl") => Some(CompilerType::ClangCL),
                 Some("clang") | Some("clang++") => Some(CompilerType::Clang),
                 Some("gcc") | Some("g++") => Some(CompilerType::GCC),
-                _ => None, // No preference = use default (first)
+                _ => cached_selection, // Fall back to cached selection
             };
 
             // Find which one is in use
@@ -504,6 +542,62 @@ fn handle_toolchain_command(op: &Option<ToolchainOp>) -> Result<()> {
                         );
                         println!("  Saved to: {}", cache_path.display().to_string().dimmed());
                     }
+
+                    // Also update cx.toml if we're in a project
+                    if Path::new("cx.toml").exists() {
+                        let compiler_str = match tc.compiler_type {
+                            toolchain::CompilerType::MSVC => "msvc",
+                            toolchain::CompilerType::ClangCL => "clang-cl",
+                            toolchain::CompilerType::Clang => "clang",
+                            toolchain::CompilerType::GCC => "g++",
+                        };
+
+                        // Read current cx.toml
+                        if let Ok(toml_content) = std::fs::read_to_string("cx.toml") {
+                            let new_content = if toml_content.contains("[build]") {
+                                // Update existing [build] section
+                                if toml_content.contains("compiler =") {
+                                    // Replace existing compiler line
+                                    let mut result = String::new();
+                                    for line in toml_content.lines() {
+                                        if line.trim().starts_with("compiler =") {
+                                            result.push_str(&format!(
+                                                "compiler = \"{}\"",
+                                                compiler_str
+                                            ));
+                                        } else {
+                                            result.push_str(line);
+                                        }
+                                        result.push('\n');
+                                    }
+                                    result
+                                } else {
+                                    // Add compiler to existing [build] section
+                                    toml_content.replace(
+                                        "[build]",
+                                        &format!("[build]\ncompiler = \"{}\"", compiler_str),
+                                    )
+                                }
+                            } else {
+                                // Add new [build] section
+                                format!(
+                                    "{}\n[build]\ncompiler = \"{}\"\n",
+                                    toml_content.trim_end(),
+                                    compiler_str
+                                )
+                            };
+
+                            if let Err(e) = std::fs::write("cx.toml", new_content) {
+                                println!("{} Failed to update cx.toml: {}", "x".red(), e);
+                            } else {
+                                println!(
+                                    "  {} Updated cx.toml with compiler = \"{}\"",
+                                    "✓".green(),
+                                    compiler_str.cyan()
+                                );
+                            }
+                        }
+                    }
                 }
             }
 
@@ -540,5 +634,196 @@ fn handle_toolchain_command(op: &Option<ToolchainOp>) -> Result<()> {
         println!("  On Unix, the default clang++ or g++ from PATH is used.");
     }
 
+    Ok(())
+}
+
+fn run_doctor() -> Result<()> {
+    println!();
+    println!("{}", "Doctor Summary".bold().cyan());
+    println!("{}", "═".repeat(50));
+
+    let mut issues: Vec<String> = Vec::new();
+    let mut suggestions: Vec<String> = Vec::new();
+
+    // === Toolchain Check ===
+    println!("\n{}", "Toolchain:".bold());
+
+    #[cfg(windows)]
+    {
+        use toolchain::windows::discover_all_toolchains;
+
+        let toolchains = discover_all_toolchains();
+        if toolchains.is_empty() {
+            println!("  {} No C/C++ toolchain found", "[✗]".red());
+            issues.push("No C/C++ compiler detected".to_string());
+            suggestions.push("Install Visual Studio Build Tools or LLVM".to_string());
+        } else {
+            // Show first (default) toolchain
+            if let Some(tc) = toolchains.first() {
+                println!("  {} {} ({})", "[✓]".green(), tc.display_name, tc.source);
+            }
+            println!(
+                "  {} {} toolchains available (run {} to see all)",
+                "[✓]".green(),
+                toolchains.len(),
+                "cx info".cyan()
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Check for clang++ or g++
+        let compilers = [("clang++", "Clang"), ("g++", "GCC")];
+        let mut found = false;
+        for (bin, name) in compilers {
+            if let Ok(output) = std::process::Command::new(bin).arg("--version").output() {
+                if output.status.success() {
+                    let ver = String::from_utf8_lossy(&output.stdout);
+                    let first_line = ver.lines().next().unwrap_or("").trim();
+                    println!("  {} {} - {}", "[✓]".green(), name, first_line);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            println!("  {} No C/C++ compiler found", "[✗]".red());
+            issues.push("No C/C++ compiler detected".to_string());
+            suggestions.push("Install clang++ or g++".to_string());
+        }
+    }
+
+    // === Build Tools Check ===
+    println!("\n{}", "Build Tools:".bold());
+
+    let tools = [
+        ("cmake", "CMake", true),
+        ("make", "Make", false),
+        ("ninja", "Ninja", false),
+        ("git", "Git", true),
+    ];
+
+    for (bin, name, required) in tools {
+        let output = std::process::Command::new(bin).arg("--version").output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let ver = String::from_utf8_lossy(&out.stdout);
+                let first_line = ver.lines().next().unwrap_or("").trim();
+                let short = if first_line.len() > 40 {
+                    &first_line[..40]
+                } else {
+                    first_line
+                };
+                println!("  {} {} - {}", "[✓]".green(), name, short);
+            }
+            _ => {
+                if required {
+                    println!("  {} {} - Not found", "[✗]".red(), name);
+                    issues.push(format!("{} not found", name));
+                    suggestions.push(format!("Install {}", name));
+                } else {
+                    println!("  {} {} - Not found (optional)", "[!]".yellow(), name);
+                }
+            }
+        }
+    }
+
+    // === Project Check ===
+    println!("\n{}", "Project:".bold());
+
+    let cx_toml_exists = Path::new("cx.toml").exists();
+    if cx_toml_exists {
+        println!("  {} cx.toml found", "[✓]".green());
+
+        // Validate cx.toml
+        match build::load_config() {
+            Ok(config) => {
+                println!("  {} Config valid", "[✓]".green());
+
+                // Check package info
+                {
+                    let pkg = &config.package;
+                    println!(
+                        "  {} Package: {} v{}",
+                        "[✓]".green(),
+                        pkg.name.cyan(),
+                        pkg.version
+                    );
+                }
+
+                // Check compiler setting
+                if let Some(build_cfg) = &config.build {
+                    if let Some(compiler) = &build_cfg.compiler {
+                        println!("  {} Compiler: {}", "[✓]".green(), compiler.cyan());
+                    } else {
+                        println!("  {} No compiler specified (using default)", "[!]".yellow());
+                        suggestions.push("Run 'cx toolchain' to select a compiler".to_string());
+                    }
+                }
+
+                // Check dependencies
+                if let Some(deps) = &config.dependencies {
+                    let dep_count = deps.len();
+                    if dep_count > 0 {
+                        println!("  {} {} dependencies", "[✓]".green(), dep_count);
+                    } else {
+                        println!("  {} No dependencies", "[!]".yellow());
+                    }
+                } else {
+                    println!("  {} No dependencies section", "[!]".yellow());
+                }
+            }
+            Err(e) => {
+                println!("  {} cx.toml parse error: {}", "[✗]".red(), e);
+                issues.push("cx.toml is invalid".to_string());
+                suggestions.push("Check cx.toml syntax".to_string());
+            }
+        }
+
+        // Check src directory
+        if Path::new("src").exists() {
+            let has_main = Path::new("src/main.cpp").exists()
+                || Path::new("src/main.c").exists()
+                || Path::new("src/main.cc").exists();
+            if has_main {
+                println!("  {} Source files found", "[✓]".green());
+            } else {
+                println!("  {} No main.cpp/main.c in src/", "[!]".yellow());
+                suggestions.push("Create src/main.cpp with your entry point".to_string());
+            }
+        } else {
+            println!("  {} src/ directory missing", "[✗]".red());
+            issues.push("No src/ directory".to_string());
+            suggestions.push("Create src/ directory with source files".to_string());
+        }
+    } else {
+        println!("  {} Not in a cx project (no cx.toml)", "[!]".yellow());
+        println!(
+            "       Run {} to create a new project",
+            "cx new <name>".cyan()
+        );
+    }
+
+    // === Summary ===
+    println!("\n{}", "═".repeat(50));
+
+    if issues.is_empty() {
+        println!("{}", "✓ No issues found!".green().bold());
+    } else {
+        println!("{} {} issue(s) found:", "✗".red(), issues.len());
+        for issue in &issues {
+            println!("  • {}", issue.red());
+        }
+    }
+
+    if !suggestions.is_empty() {
+        println!("\n{}", "Suggestions:".bold());
+        for suggestion in &suggestions {
+            println!("  • {}", suggestion.yellow());
+        }
+    }
+
+    println!();
     Ok(())
 }
