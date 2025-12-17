@@ -4,7 +4,6 @@ use semver::Version;
 use serde::Deserialize;
 use std::env;
 use std::fs;
-use std::io;
 
 const REPO_OWNER: &str = "dhimasardinata";
 const REPO_NAME: &str = "caxe";
