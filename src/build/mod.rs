@@ -1,5 +1,6 @@
 mod clean;
 mod core;
+mod feedback;
 mod test;
 mod utils;
 mod watcher;

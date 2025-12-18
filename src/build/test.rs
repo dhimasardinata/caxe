@@ -1,6 +1,5 @@
 use super::utils::{get_compiler, load_config};
 use crate::config::CxConfig;
-use crate::deps;
 use anyhow::Result;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -10,7 +9,7 @@ use std::path::Path;
 use std::process::Command;
 use walkdir::WalkDir;
 
-pub fn run_tests() -> Result<()> {
+pub fn run_tests(filter: Option<String>) -> Result<()> {
     // Load config or default
     let config = load_config().unwrap_or_else(|_| CxConfig {
         package: crate::config::PackageConfig {
@@ -39,7 +38,7 @@ pub fn run_tests() -> Result<()> {
 
     if let Some(deps) = &config.dependencies {
         if !deps.is_empty() {
-            let (paths, cflags, libs) = deps::fetch_dependencies(deps)?;
+            let (paths, cflags, libs) = crate::deps::fetch_dependencies(deps)?;
             include_paths = paths;
             extra_cflags = cflags;
             dep_libs = libs;
@@ -47,7 +46,33 @@ pub fn run_tests() -> Result<()> {
     }
 
     println!("{} Running tests...", "🧪".magenta());
+    if let Some(f) = &filter {
+        println!("   Filter: {}", f.cyan());
+    }
     fs::create_dir_all("build/tests")?;
+
+    // Collect Project Object Files (excluding main)
+    // We assume the project was built in 'debug' mode for tests
+    let obj_dir = Path::new("build/debug/obj");
+    let mut project_objs = Vec::new();
+    if obj_dir.exists() {
+        for entry in WalkDir::new(obj_dir).into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "o" || e == "obj") {
+                // Exclude main.o / main.obj to avoid multiple entry points
+                let stem = path.file_stem().unwrap().to_string_lossy();
+                if stem != "main" {
+                    project_objs.push(path.to_path_buf());
+                }
+            }
+        }
+    } else {
+        println!(
+            "{} Warning: Project not built. Running tests without linking project sources.",
+            "!".yellow()
+        );
+        println!("   Run 'cx build' first to link project code.");
+    }
 
     let mut test_files = Vec::new();
     for entry in WalkDir::new(test_dir).into_iter().filter_map(|e| e.ok()) {
@@ -58,8 +83,20 @@ pub fn run_tests() -> Result<()> {
         let is_c = path.extension().map_or(false, |ext| ext == "c");
 
         if is_cpp || is_c {
+            // Apply Filter
+            if let Some(f) = &filter {
+                let name = path.file_stem().unwrap().to_string_lossy();
+                if !name.contains(f) {
+                    continue;
+                }
+            }
             test_files.push((path, is_cpp));
         }
+    }
+
+    if test_files.is_empty() {
+        println!("{} No tests found.", "!".yellow());
+        return Ok(());
     }
 
     let pb = ProgressBar::new((test_files.len() * 2) as u64);
@@ -76,6 +113,33 @@ pub fn run_tests() -> Result<()> {
         .map(|(path, is_cpp)| {
             let test_name = path.file_stem().unwrap().to_string_lossy().to_string();
             let output_bin = format!("build/tests/{}", test_name);
+
+            // Caching Check: Compare mtime of test source vs test binary
+            // In a real system, we'd check dependencies too, but this is a start.
+            let bin_path = if cfg!(target_os = "windows") {
+                format!("{}.exe", output_bin)
+            } else {
+                output_bin.clone()
+            };
+
+            let skip_compile = if Path::new(&bin_path).exists() {
+                let src_mtime = fs::metadata(path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                let bin_mtime = fs::metadata(&bin_path)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                // If source is older than binary, we *might* skip.
+                // Ideally we also check project object mtimes, but let's keep it simple for now or check one level deep.
+                src_mtime < bin_mtime
+            } else {
+                false
+            };
+
+            if skip_compile {
+                pb.inc(1); // Skip compile step
+                return (test_name, Some(output_bin));
+            }
 
             pb.set_message(format!("Compiling {}", test_name));
 
@@ -94,6 +158,8 @@ pub fn run_tests() -> Result<()> {
                 for p in &include_paths {
                     cmd.arg(format!("/I{}", p.display()));
                 }
+                // Include "src" so tests can "#include <main.hpp>" easily
+                cmd.arg("/Isrc");
             } else {
                 cmd.arg(path);
                 cmd.arg("-o").arg(&output_bin);
@@ -103,6 +169,7 @@ pub fn run_tests() -> Result<()> {
                 for p in &include_paths {
                     cmd.arg(format!("-I{}", p.display()));
                 }
+                cmd.arg("-Isrc");
             }
 
             cmd.args(&extra_cflags);
@@ -113,11 +180,16 @@ pub fn run_tests() -> Result<()> {
                 }
             }
 
-            // Link Libs
+            // Link Libs & Project Objects
             if is_msvc {
                 cmd.arg("/link");
             }
             cmd.args(&dep_libs);
+
+            // Link Project Objects
+            for obj in &project_objs {
+                cmd.arg(obj);
+            }
 
             if let Some(build_cfg) = &config.build {
                 if let Some(libs) = &build_cfg.libs {
@@ -162,7 +234,7 @@ pub fn run_tests() -> Result<()> {
         })
         .collect();
 
-    // Phase 2: Sequential Execution
+    // Phase 2: Sequential Execution (Running Tests)
     let mut passed_tests = 0;
     let mut total_tests = 0;
 

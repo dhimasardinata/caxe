@@ -10,8 +10,20 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use walkdir::WalkDir;
+
+#[derive(serde::Serialize)]
+struct TraceEvent {
+    name: String,
+    cat: String,
+    ph: String,
+    ts: u128,
+    dur: u128,
+    pid: u32,
+    tid: usize,
+}
 
 // --- Helper: Check Dependencies (.d file) ---
 fn check_dependencies(obj_path: &Path, src_path: &Path) -> Result<bool> {
@@ -56,6 +68,10 @@ pub fn build_project(
     release: bool,
     verbose: bool,
     dry_run: bool,
+    enable_profile: bool,
+    wasm: bool,
+    lto: bool,
+    sanitize: Option<String>,
 ) -> Result<bool> {
     let start_time = Instant::now();
     let current_dir = std::env::current_dir()?;
@@ -70,12 +86,16 @@ pub fn build_project(
             &config.package.edition
         };
         let profile_str = if release { "release" } else { "debug" };
-        let compiler_str = config
-            .build
-            .as_ref()
-            .and_then(|b| b.compiler.as_ref())
-            .map(|s| s.as_str())
-            .unwrap_or("auto");
+        let compiler_str = if wasm {
+            "em++"
+        } else {
+            config
+                .build
+                .as_ref()
+                .and_then(|b| b.compiler.as_ref())
+                .map(|s| s.as_str())
+                .unwrap_or("auto")
+        };
 
         println!();
         let mode = if dry_run {
@@ -112,6 +132,24 @@ pub fn build_project(
             "Compiler".dimmed().to_string(),
             compiler_str.cyan().to_string(),
         ]);
+        if wasm {
+            table.add_row(vec![
+                "Target".dimmed().to_string(),
+                "WASM (Emscripten)".magenta().to_string(),
+            ]);
+        }
+        if lto {
+            table.add_row(vec![
+                "LTO".dimmed().to_string(),
+                "Enabled".green().bold().to_string(),
+            ]);
+        }
+        if let Some(san) = &sanitize {
+            table.add_row(vec![
+                "Sanitizers".dimmed().to_string(),
+                san.yellow().bold().to_string(),
+            ]);
+        }
 
         table.print();
         println!();
@@ -142,7 +180,9 @@ pub fn build_project(
         config.package.name.clone()
     };
 
-    let bin_name = if cfg!(target_os = "windows") {
+    let bin_name = if wasm {
+        format!("{}.html", bin_basename)
+    } else if cfg!(target_os = "windows") {
         format!("{}.exe", bin_basename)
     } else {
         bin_basename
@@ -194,19 +234,55 @@ pub fn build_project(
     }
 
     // Get toolchain with environment variables
-    let toolchain = super::utils::get_toolchain(config, has_cpp).ok();
-    let compiler = if let Some(ref tc) = toolchain {
+    let toolchain = if wasm {
+        None
+    } else {
+        super::utils::get_toolchain(config, has_cpp).ok()
+    };
+
+    let compiler = if wasm {
+        "em++".to_string()
+    } else if let Some(ref tc) = toolchain {
         tc.cxx_path.to_string_lossy().to_string()
     } else {
         get_compiler(config, has_cpp)
     };
+
+    // Helper to check for CCache
+    let ccache_prefix = if !wasm {
+        if Command::new("ccache").arg("--version").output().is_ok() {
+            Some("ccache")
+        } else if Command::new("sccache").arg("--version").output().is_ok() {
+            Some("sccache")
+        } else {
+            None
+        }
+    } else {
+        None // don't use ccache with emscripten unless configured carefully
+    };
+
+    if wasm {
+        // Simple check if em++ exists
+        if Command::new(&compiler).arg("--version").output().is_err() {
+            println!("{} Emscripten (em++) not found in PATH.", "x".red());
+            println!("   Please install Emscripten SDK.");
+            return Ok(false);
+        }
+    }
+
     let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
+    // let is_clang = compiler.contains("clang");
+    // let is_gcc = compiler.contains("g++") || compiler.contains("gcc");
+
     let current_dir_str = current_dir.to_string_lossy().to_string();
 
     // Verbose: Show toolchain info
     if verbose {
         println!("{}", "Toolchain:".bold());
         println!("  Compiler: {}", compiler.cyan());
+        if let Some(cc) = ccache_prefix {
+            println!("  Wrapper: {}", cc.yellow().bold());
+        }
         println!(
             "  Type: {}",
             if is_msvc {
@@ -241,6 +317,28 @@ pub fn build_project(
             common_flags.push(format!("-I{}", path.display()));
         }
     }
+
+    // LTO Flags
+    if lto {
+        if is_msvc {
+            common_flags.push("/GL".to_string()); // Whole Program Optimization (Compile)
+        } else {
+            common_flags.push("-flto".to_string());
+        }
+    }
+
+    // Sanitizer Flags (GCC/Clang only mostly)
+    if let Some(checks) = &sanitize {
+        if !is_msvc {
+            common_flags.push(format!("-fsanitize={}", checks));
+            common_flags.push("-fno-omit-frame-pointer".to_string()); // Good practice for sanitizers
+        } else {
+            // Very limited MSVC AddressSanitizer support exists in newer VS, but args differ.
+            // For now, warn user it might not work as expected or requires specific VS version.
+            common_flags.push(format!("/fsanitize={}", checks)); // Recent MSVC uses this syntax
+        }
+    }
+
     common_flags.extend(extra_cflags.clone());
 
     // Verbose: Show include paths and flags
@@ -269,9 +367,12 @@ pub fn build_project(
                 .unwrap_or(compiler.as_ref())
                 .to_string_lossy();
 
+            let prefix = ccache_prefix.map(|c| format!("{} ", c)).unwrap_or_default();
+
             let cmd = if is_msvc {
                 format!(
-                    "  → {} -c {} → {}",
+                    "  → {}{} -c {} → {}",
+                    prefix,
                     short_compiler,
                     src_path.display(),
                     obj_path
@@ -281,7 +382,8 @@ pub fn build_project(
                 )
             } else {
                 format!(
-                    "  → {} -c {} → {}",
+                    "  → {}{} -c {} → {}",
+                    prefix,
                     short_compiler,
                     src_path.display(),
                     obj_path
@@ -372,10 +474,6 @@ pub fn build_project(
                     pch_args.push(format!("/Fp{}", pch_out.display()));
 
                     // MSVC requires the object file of the PCH to be linked too!
-                    // We need to add it to 'source_files' or 'dep_libs'?
-                    // Actually, we usually just link the .obj generated from PCH.
-                    // I'll leave it for now, user might include it manually or we handle it.
-                    // IMPORTANT: MSVC PCH creation generates an .obj file that MUST be linked.
                     dep_libs.push(
                         obj_dir
                             .join(format!("{}.obj", pch_name))
@@ -395,7 +493,16 @@ pub fn build_project(
 
                     if need_pch {
                         println!("{} Compiling PCH (GCC/Clang)...", "⚙".cyan());
-                        let mut cmd = Command::new(&compiler);
+
+                        // Handle ccache prefix for PCH? Usually safe.
+                        let mut cmd = if let Some(wrapper) = ccache_prefix {
+                            let mut c = Command::new(wrapper);
+                            c.arg(&compiler);
+                            c
+                        } else {
+                            Command::new(&compiler)
+                        };
+
                         cmd.args(&["-c"]);
                         cmd.arg(pch_source);
                         cmd.arg("-o");
@@ -420,6 +527,14 @@ pub fn build_project(
         }
     }
 
+    // Profiling Setup
+    let trace_events = if enable_profile {
+        Some(Arc::new(Mutex::new(Vec::new())))
+    } else {
+        None
+    };
+    let build_start_time = Instant::now();
+
     // 6. Parallel Compilation (Lock-Free Optimization)
     let spinner_style = ProgressStyle::default_spinner()
         .template("{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
@@ -442,6 +557,11 @@ pub fn build_project(
 
             // Construct Arguments
             let mut args = Vec::new();
+
+            // CCache injection
+            if let Some(wrapper) = ccache_prefix {
+                args.push(wrapper.to_string());
+            }
             args.push(compiler.clone());
 
             if is_msvc {
@@ -524,6 +644,8 @@ pub fn build_project(
                 }
             };
 
+            // Profiling Start
+            let compile_start = Instant::now();
             if needs_compile {
                 pb.set_message(format!("Compiling {}", stem));
                 let mut cmd = Command::new(&args[0]);
@@ -547,6 +669,16 @@ pub fn build_project(
                         stderr
                     );
                     pb.println(format!("{} {}", "x".red(), error_msg));
+
+                    // Educational Feedback
+                    if let Some(suggestion) = super::feedback::FeedbackAnalyzer::analyze(&stderr) {
+                        pb.println(format!(
+                            "\n{} {}\n",
+                            "💡 Suggestion:".bold().yellow(),
+                            suggestion
+                        ));
+                    }
+
                     return Err(anyhow::anyhow!("Compilation failed"));
                 } else {
                     // Print warnings if any (buffered)
@@ -572,12 +704,49 @@ pub fn build_project(
                 }
             }
 
+            // Profiling End
+            if let Some(events) = &trace_events {
+                let duration = compile_start.elapsed();
+                let ts = compile_start.duration_since(build_start_time).as_micros();
+                let dur = duration.as_micros();
+                // Capture thread ID (best effort)
+                let tid = rayon::current_thread_index().unwrap_or(0);
+
+                if let Ok(mut lock) = events.lock() {
+                    lock.push(TraceEvent {
+                        name: src_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string(),
+                        cat: "compilation".to_string(),
+                        ph: "X".to_string(),
+                        ts,
+                        dur,
+                        pid: 1,
+                        tid,
+                    });
+                }
+            }
+
             pb.inc(1);
             Ok((obj_path, entry))
         })
         .collect::<Result<Vec<_>>>()?; // Collects errors if any
 
     pb.finish_with_message("Compilation complete");
+
+    // Profiling Dump
+    if let Some(events) = trace_events {
+        if let Ok(locked) = events.lock() {
+            let json = serde_json::to_string(&*locked)?;
+            fs::write("build_trace.json", json)?;
+            println!(
+                "   {} Profile saved to build_trace.json (Chrome Tracing)",
+                "📊".blue()
+            );
+        }
+    }
 
     // Unzip results separate object files and JSON entries
     let (object_files, json_entries): (Vec<PathBuf>, Vec<serde_json::Value>) =
@@ -621,6 +790,22 @@ pub fn build_project(
 
         let mut cmd = Command::new(&effective_compiler);
 
+        // Link Flags for LTO
+        if lto {
+            if is_msvc {
+                cmd.arg("/LTCG");
+            } else {
+                cmd.arg("-flto");
+            }
+        }
+
+        // Link Flags for Sanitizers
+        if let Some(checks) = &sanitize {
+            if !is_msvc {
+                cmd.arg(format!("-fsanitize={}", checks));
+            }
+        }
+
         cmd.args(&object_files);
 
         if is_msvc || use_clang_cl {
@@ -656,8 +841,14 @@ pub fn build_project(
         let output = cmd.output()?;
         if !output.status.success() {
             println!("{}", String::from_utf8_lossy(&output.stdout));
-            println!("{}", String::from_utf8_lossy(&output.stderr));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            println!("{}", stderr);
             println!("{} Linking failed", "x".red());
+
+            if let Some(suggestion) = super::feedback::FeedbackAnalyzer::analyze(&stderr) {
+                println!("\n{} {}\n", "💡 Suggestion:".bold().yellow(), suggestion);
+            }
+
             return Ok(false);
         }
 
@@ -692,7 +883,9 @@ pub fn build_and_run(
     // Load config once here
     let config = load_config()?;
 
-    let success = build_project(&config, release, verbose, dry_run)?;
+    let success = build_project(
+        &config, release, verbose, dry_run, false, false, false, None,
+    )?;
     if !success {
         return Ok(());
     }

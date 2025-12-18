@@ -58,3 +58,42 @@ pub fn clean() -> Result<()> {
     }
     Ok(())
 }
+
+pub fn prune_unused(keep_deps: &[String]) -> Result<()> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    let cache_dir = home.join(".cx").join("cache");
+
+    if !cache_dir.exists() {
+        println!("{} Cache is already empty.", "✓".green());
+        return Ok(());
+    }
+
+    println!("{} Pruning unused packages...", "🧹".yellow());
+    let entries = fs::read_dir(&cache_dir)?;
+    let mut removed_count = 0;
+
+    for entry in entries {
+        if let Ok(entry) = entry {
+            let path = entry.path();
+            if path.is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !keep_deps.contains(&name) {
+                    println!("   {} Removing unused: {}", "🗑️".red(), name);
+                    if let Err(e) = fs::remove_dir_all(&path) {
+                        println!("     Error removing {}: {}", name, e);
+                    } else {
+                        removed_count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if removed_count == 0 {
+        println!("{} All cached packages are in use.", "✓".green());
+    } else {
+        println!("{} Removed {} unused packages.", "✓".green(), removed_count);
+    }
+
+    Ok(())
+}

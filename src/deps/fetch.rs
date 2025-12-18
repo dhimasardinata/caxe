@@ -99,10 +99,21 @@ pub fn fetch_dependencies(
             _ => continue,
         };
 
-        let lib_path = cache_dir.join(name);
+        // Check for local vendor override
+        let vendor_path = std::env::current_dir()?.join("vendor").join(&name);
+
+        let (lib_path, is_vendor) = if vendor_path.exists() {
+            (vendor_path, true)
+        } else {
+            (cache_dir.join(&name), false)
+        };
 
         // A. Download (Clone) or Open Existing
         let repo = if !lib_path.exists() {
+            // Cannot download if we expected vendor but it's missing (should have fallen back to cache)
+            // Logic: If vendor exists, use it. If not, use cache.
+            // If cache missing, download to cache.
+
             let pb = ProgressBar::new_spinner();
             pb.set_style(
                 ProgressStyle::default_spinner()
@@ -124,7 +135,11 @@ pub fn fetch_dependencies(
                 }
             }
         } else {
-            println!("   {} Using cached: {}", "⚡".green(), name);
+            if is_vendor {
+                println!("   {} Using vendor: {}", "📦".blue(), name);
+            } else {
+                println!("   {} Using cached: {}", "⚡".green(), name);
+            }
             match Repository::open(&lib_path) {
                 Ok(r) => r,
                 Err(_) => continue,

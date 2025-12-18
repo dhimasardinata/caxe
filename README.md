@@ -2,7 +2,6 @@
 
 [![CI](https://github.com/dhimasardinata/caxe/actions/workflows/ci.yml/badge.svg)](https://github.com/dhimasardinata/caxe/actions/workflows/ci.yml)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/dhimasardinata/caxe?label=latest%20version&color=green)](https://github.com/dhimasardinata/caxe/releases)
-[![GitHub all releases](https://img.shields.io/github/downloads/dhimasardinata/caxe/total?color=blue&label=downloads&logo=github)](https://github.com/dhimasardinata/caxe/releases)
 [![Crates.io](https://img.shields.io/crates/v/caxe.svg)](https://crates.io/crates/caxe)
 
 **caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
@@ -18,13 +17,19 @@ It provides a unified workflow for scaffolding, building, testing, formatting, a
 - **📦 Smart Dependency Management**:
   - **Git Libraries**: Auto-download from GitHub. Supports **Pinning** (Tag/Branch/Commit) for stability.
   - **System Packages**: Native support for `pkg-config` (e.g., GTK, OpenSSL).
-  - **Header-Only Support**: Automatically detects libraries that don't need linking (e.g., nlohmann/json).
+  - **Vendor Mode**: `cx vendor` to copy dependencies locally for offline builds.
+- **🚀 High-Performance Builds**: 
+  - **Lock-free Parallel Compilation**: Utilizes all CPU cores.
+  - **Caching**: **CCache** integration, incremental builds, and PCH support.
+  - **LTO**: Link Time Optimization for release builds.
+- **🧪 Smart Testing**: 
+  - Auto-links project sources for unit testing internals.
+  - Test filtering (`--filter`) and binary caching.
+- **📊 Insights**: `cx stats` for code metrics and `cx tree` for dependency graphs.
+- **🌍 WebAssembly**: `cx build --wasm` (via Emscripten) support out of the box.
+- **🛡️ Safety**: `cx build --sanitize` for Address/Undefined Behavior sanitizers.
 - **🎨 Code Formatting**: Built-in `cx fmt` command (via `clang-format`).
-- **🚀 High-Performance Builds**: Lock-free **Parallel Compilation** (source & tests) + **Precompiled Headers (PCH)** support.
-- **💾 Global Caching**: Libraries are downloaded once and shared across all projects. Use `cx update` to refresh them.
-- **👁️ Watch & TDD Mode**: Automatically recompiles (and optionally runs tests) when you save a file.
-- **🐚 Shell Completion**: Generate autocomplete scripts for PowerShell, Bash, Zsh, Fish.
-- **🛠️ Flexible Configuration**: Custom binary names, compiler selection, and build scripts.
+- **🤖 Automation**: Generators for **Docker**, **GitHub Actions**, and **VSCode** configs.
 
 ## 📦 Installation
 
@@ -46,15 +51,11 @@ curl -fsSL https://raw.githubusercontent.com/dhimasardinata/caxe/main/install.sh
 cargo install caxe
 ```
 
-### Option 3: Manual Download
-
-Download the latest binary from [Releases](https://github.com/dhimasardinata/caxe/releases/latest) and add it to your PATH.
-
 ## 🚀 Quick Start
 
 ### Interactive Mode
 
-Simply run `cx new` without arguments to start the wizard.
+Simply run `cx` or `cx new` without given name to start the wizard.
 
 ```bash
 cx new
@@ -80,124 +81,43 @@ cx new my-game --template raylib
 
 ## 📖 CLI Reference
 
-### `cx new <name>`
+### Project Management
+- **`cx new <name>`**: Create a new project.
+- **`cx init`**: Initialize `cx.toml` in an existing directory (imports CMake/Makefile projects!).
+- **`cx info`**: Show system, cache, and toolchain info.
+- **`cx doctor`**: Diagnose system issues (missing tools, compilers).
+- **`cx stats`**: Show project code metrics (LOC, files).
 
-Creates a new project.
+### Build & Run
+- **`cx run`**: Build and run the project.
+- **`cx build`**: Compile only.
+  - `--release`: Optimize for speed (`-O3` / `/O2`).
+  - `--wasm`: Compile to WebAssembly (requires Emscripten).
+  - `--lto`: Enable Link Time Optimization.
+  - `--sanitize=<check>`: Enable runtime sanitizers (e.g., `address`, `undefined`).
+  - `--profile`: Trace build times (generate chrome tracing `.json`).
+- **`cx watch`**: Rebuild on file save.
+- **`cx clean`**: Remove build artifacts.
 
-- `--lang <c|cpp>` : Set language.
-- `--template <console|web|raylib>` : Choose template.
+### Dependencies
+- **`cx add <lib>`**: Add a library from registry or Git URL.
+- **`cx remove <lib>`**: Remove a dependency.
+- **`cx update`**: Update dependencies to latest versions.
+- **`cx vendor`**: Copy all dependencies into `vendor/` for commit/offline use.
+- **`cx tree`**: Visualize the dependency graph.
 
-### `cx run`
+### Testing & Quality
+- **`cx test`**: Run unit tests in `tests/`.
+  - `--filter <name>`: Run specific tests.
+- **`cx fmt`**: Format code with `clang-format`.
+- **`cx check`**: Static analysis (clang-tidy/cppcheck).
 
-
-Compiles and runs the project.
-
-- `--release` : Enable optimizations (`-O3`).
-- `-v, --verbose` : Show detailed build commands and decisions.
-- `--dry-run` : Preview commands without executing (shows compile/link commands).
-- `-- <args>` : Pass arguments to your executable.
-
-### `cx build`
-
-Compiles the project without running it.
-
-- `--release` : Enable optimizations.
-- `-v, --verbose` : Show detailed build commands and decisions.
-- `--dry-run` : Preview commands without executing.
-
-### `cx add <lib>`
-
-Adds a Git dependency to `cx.toml`. Supports version pinning.
-
-- **Alias (New!)**: `cx add raylib` (No URL needed!)
-- **Standard**: `cx add nlohmann/json`
-- **Tag**: `cx add nlohmann/json --tag v3.11.2`
-- **Branch**: `cx add raysan5/raylib --branch master`
-- **Commit**: `cx add fmtlib/fmt --rev a3b1c2d`
-
-### `cx remove <lib>`
-
-Removes a dependency from `cx.toml`.
-
-### `cx update`
-
-Updates all dependencies in your cache to the latest version (unless pinned).
-
-### `cx fmt`
-
-Formats all source code in `src/`. Requires `clang-format`.
-
-### `cx clean`
-
-Removes the `build/` directory and metadata files.
-- `--cache` : Wipe the global library cache (`~/.cx/cache`).
-- `--all` : Remove all artifacts (build, docs, compile_commands, etc.).
-
-### `cx watch`
-
-Watches for file changes and auto-runs.
-- `--test` : **TDD Mode**. Runs tests instead of the main app.
-
-### `cx completion <shell>`
-**_New!_** Generate shell completion scripts.
-```bash
-# PowerShell
-cx completion powershell | Out-File $PROFILE
-# Bash
-cx completion bash > ~/.cx-completion.bash
-```
-
-### `cx test`
-
-Compiles and runs files in `tests/` directory.
-
-### `cx search <query>`
-**_New!_** Search for libraries in the official registry.
-```bash
-cx search raylib
-# Output: raylib - https://github.com/raysan5/raylib.git
-```
-
-### `cx lock` & Reproducibility
-**_New!_** caxe automatically generates a `cx.lock` file to pin dependencies to exact commits.
-- Run `cx update` to ignore the lockfile and fetch the latest versions.
-
-### `cx init`
-**_New!_** Initialize a caxe project in an existing directory.
-
-### `cx cache <clean|ls|path>`
-**_New!_** Manage the global library cache.
-- `clean`: Wipe all cached libraries.
-- `ls`: List cached libraries.
-- `path`: Show cache directory path.
-
-### `cx upgrade`
-**_New!_** Self-update caxe to the latest version.
-
-### `cx toolchain`
-**_New!_** Manage compiler toolchains.
-- Run `cx toolchain` to interactively select a compiler
-- `cx toolchain clear` to reset cached selection
-
-### `cx info`
-
-Displays diagnostic information including:
-- All available toolchains (MSVC, Clang-CL, Clang++, GCC)
-- Currently active compiler (marked with `← in use`)
-- Target ABI (x86_64/x86)
-- Build tools status (CMake, Make, Ninja)
-
-### `cx doctor`
-**_New!_** Diagnose system and project issues.
-- Checks: Toolchain, Build Tools (CMake/Make/Ninja/Git), Project config
-- Shows issues and suggestions for fixing them
-- Great for troubleshooting build problems
-
----
+### Ecosystem
+- **`cx docker`**: Generate a Dockerfile.
+- **`cx ci`**: Generate a GitHub Actions workflow.
+- **`cx setup-ide`**: Generate VSCode configuration (`.vscode/`).
 
 ## ⚙️ Configuration (`cx.toml`)
-
-Comprehensive configuration example:
 
 ```toml
 [package]
@@ -218,43 +138,9 @@ fmt = "https://github.com/fmtlib/fmt.git"
 
 # 2. Pinned Version (Recommended for production)
 json = { git = "https://github.com/nlohmann/json.git", tag = "v3.11.2" }
-# Pin to specific commit hash
-utils = { git = "...", rev = "a1b2c3d4" }
 
 # 3. System Dependency (pkg-config)
 gtk4 = { pkg = "gtk4" }
-
-# 4. Complex Build (Library with source code)
-# 'output' field tells caxe to link this file.
-# If 'output' is missing, caxe treats it as Header-Only.
-raylib = { git = "...", build = "make", output = "src/libraylib.a" }
-
-[scripts]
-pre_build = "echo Compiling..."
-post_build = "echo Done!"
-```
-
-## 🛠️ Advanced
-
-### Header-Only Libraries
-
-`caxe` is smart. If you add a library like `nlohmann/json` or `fmt` and do not specify an `output` file in `cx.toml`, `caxe` assumes it is a **Header-Only** library. It will add the include paths (`-I`) but will not attempt to link any static library.
-
-### Environment Variables
-
-Override the compiler without changing config:
-
-```bash
-# Windows (PowerShell)
-$env:CXX="g++"; cx run
-```
-
-### Unit Testing
-
-Create a `tests/` directory and add `.cpp` files.
-
-```bash
-cx test
 ```
 
 ## 📝 License

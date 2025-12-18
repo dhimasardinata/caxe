@@ -4,7 +4,7 @@ use dirs;
 use std::fs;
 use std::path::Path;
 
-pub fn clean(cache: bool, all: bool) -> Result<()> {
+pub fn clean(cache: bool, all: bool, unused: bool) -> Result<()> {
     let mut cleaned = false;
 
     // 1. Clean Build Directory (Default)
@@ -16,6 +16,24 @@ pub fn clean(cache: bool, all: bool) -> Result<()> {
     if Path::new("compile_commands.json").exists() {
         fs::remove_file("compile_commands.json").context("Failed to remove compile commands")?;
         cleaned = true;
+    }
+
+    if unused {
+        if let Ok(config) = super::load_config() {
+            let mut keep_deps = Vec::new();
+            if let Some(deps) = config.dependencies {
+                for (name, _) in deps {
+                    keep_deps.push(name);
+                }
+            }
+            crate::cache::prune_unused(&keep_deps)?;
+            cleaned = true;
+        } else {
+            println!(
+                "{} Could not load cx.toml to determine unused packages.",
+                "!".yellow()
+            );
+        }
     }
 
     // 2. Clean Cache (Global)

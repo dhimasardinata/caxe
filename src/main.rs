@@ -9,34 +9,48 @@ use std::path::{Path, PathBuf};
 mod build;
 mod cache;
 mod checker;
+mod ci;
 mod config;
 mod deps;
 mod doc;
+mod docker;
+mod ide;
+mod import;
 mod lock;
 mod registry;
+mod stats;
 mod templates;
 mod toolchain;
+mod tree;
 mod ui;
 mod upgrade;
 
 #[derive(Parser)]
 #[command(name = "cx")]
 #[command(about = "The modern C/C++ project manager", version = env!("CARGO_PKG_VERSION"))]
+#[command(long_about = None)]
+#[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Create a new project from a template
     New {
+        /// Project name (optional, defaults to interactive)
         name: Option<String>,
+        /// Language (cpp or c) [default: cpp]
         #[arg(long, default_value = "cpp")]
         lang: String,
+        /// Template (console, web, raylib, sdl2, opengl) [default: console]
         #[arg(long, default_value = "console")]
         template: String,
     },
+    /// Compile the current project
     Build {
+        /// Build artifacts in release mode, with optimizations
         #[arg(long)]
         release: bool,
         /// Show detailed build commands and decisions
@@ -45,8 +59,22 @@ enum Commands {
         /// Show what would be executed without running
         #[arg(long)]
         dry_run: bool,
+        /// Generate build profile (Chrome Tracing)
+        #[arg(long)]
+        profile: bool,
+        /// Compile to WebAssembly (requires Emscripten)
+        #[arg(long)]
+        wasm: bool,
+        /// Enable Link Time Optimization
+        #[arg(long)]
+        lto: bool,
+        /// Enable Sanitizers (address, thread, undefined, leak)
+        #[arg(long)]
+        sanitize: Option<String>,
     },
+    /// Compile and run the output binary
     Run {
+        /// Build artifacts in release mode, with optimizations
         #[arg(long)]
         release: bool,
         /// Show detailed build commands and decisions
@@ -55,53 +83,79 @@ enum Commands {
         /// Show what would be executed without running
         #[arg(long)]
         dry_run: bool,
+        /// Arguments passed to the target program
         #[arg(last = true)]
         args: Vec<String>,
     },
+    /// Add a dependency to the project
     Add {
+        /// Library name or URL
         lib: String,
+        /// Specific git tag
         #[arg(long)]
         tag: Option<String>,
+        /// Specific git branch
         #[arg(long)]
         branch: Option<String>,
+        /// Specific git revision
         #[arg(long)]
         rev: Option<String>,
     },
+    /// Remove a dependency from cx.toml
     Remove {
+        /// Library name to remove
         lib: String,
     },
+    /// Watch source files and trigger build/test on change
     Watch {
         /// Watch tests instead of just building
         #[arg(long)]
         test: bool,
     },
+    /// Clean build artifacts and cache
     Clean {
-        /// Clean global cache
+        /// Clean global dependency cache
         #[arg(long)]
         cache: bool,
-        /// Clean everything (docs, artifacts)
+        /// Clean everything (build/ dir, docs, artifacts)
         #[arg(long)]
         all: bool,
+        /// Remove unused dependencies from global cache
+        #[arg(long)]
+        unused: bool,
     },
-    Test,
+    /// Run unit tests
+    Test {
+        /// Filter tests by name
+        #[arg(long)]
+        filter: Option<String>,
+    },
+    /// Show system and project setup info
     Info,
+    /// Format code using clang-format
     Fmt,
+    /// Generate documentation using Doxygen
     Doc,
+    /// Static analysis using clang-tidy / cppcheck
     Check,
+    /// Update dependencies to latest versions
     Update,
+    /// Upgrade caxe itself (if installed via cargo)
     Upgrade,
+    /// Search the registry for libraries
     Search {
+        /// Query string
         query: String,
     },
+    /// Initialize a new cx.toml in existing directory
     Init,
+    /// Manage the global dependency cache
     Cache {
         #[command(subcommand)]
         op: CacheOp,
     },
     /// Generate shell completion scripts
-    Completion {
-        shell: Shell,
-    },
+    Completion { shell: Shell },
     /// Manage toolchain selection
     Toolchain {
         #[command(subcommand)]
@@ -109,12 +163,27 @@ enum Commands {
     },
     /// Diagnose system and project issues
     Doctor,
+    /// Vendor dependencies into local directory
+    Vendor,
+    /// Generate CI/CD workflow
+    CI,
+    /// Generate Dockerfile
+    Docker,
+    /// Generate IDE configuration (VSCode)
+    SetupIde,
+    /// Visualize dependency tree
+    Tree,
+    /// Show project statistics
+    Stats,
 }
 
 #[derive(Subcommand)]
 enum CacheOp {
+    /// Clean the cache
     Clean,
+    /// List cached items
     Ls,
+    /// Print cache directory path
     Path,
 }
 
@@ -132,13 +201,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::New {
+        Some(Commands::New {
             name,
             lang,
             template,
-        } => create_project(name, lang, template),
+        }) => create_project(name, lang, template),
 
-        Commands::Search { query } => {
+        Some(Commands::Search { query }) => {
             let results = registry::search(query);
             if results.is_empty() {
                 println!("{} No results found for '{}'", "x".red(), query);
@@ -152,53 +221,174 @@ fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Build {
+        Some(Commands::Build {
             release,
             verbose,
             dry_run,
-        } => {
+            profile,
+            wasm,
+            lto,
+            sanitize,
+        }) => {
             let config = build::load_config()?;
-            build::build_project(&config, *release, *verbose, *dry_run).map(|_| ())
+            build::build_project(
+                &config,
+                *release,
+                *verbose,
+                *dry_run,
+                *profile,
+                *wasm,
+                *lto,
+                sanitize.clone(),
+            )
+            .map(|_| ())
         }
 
-        Commands::Run {
+        Some(Commands::Run {
             release,
             verbose,
             dry_run,
             args,
-        } => build::build_and_run(*release, *verbose, *dry_run, args),
+        }) => build::build_and_run(*release, *verbose, *dry_run, args),
 
-        Commands::Watch { test } => build::watch(*test),
-        Commands::Clean { cache, all } => build::clean(*cache, *all),
-        Commands::Test => build::run_tests(),
-        Commands::Add {
+        Some(Commands::Watch { test }) => build::watch(*test),
+        Some(Commands::Clean { cache, all, unused }) => build::clean(*cache, *all, *unused),
+        Some(Commands::Test { filter }) => build::run_tests(filter.clone()),
+        Some(Commands::Add {
             lib,
             tag,
             branch,
             rev,
-        } => deps::add_dependency(lib, tag.clone(), branch.clone(), rev.clone()),
-        Commands::Remove { lib } => deps::remove_dependency(lib),
-        Commands::Info => print_info(),
-        Commands::Fmt => checker::format_code(),
-        Commands::Doc => doc::generate_docs(),
-        Commands::Check => checker::check_code(),
-        Commands::Update => deps::update_dependencies(),
-        Commands::Upgrade => upgrade::check_and_upgrade(),
-        Commands::Init => init_project(),
-        Commands::Cache { op } => match op {
+        }) => deps::add_dependency(lib, tag.clone(), branch.clone(), rev.clone()),
+        Some(Commands::Remove { lib }) => deps::remove_dependency(lib),
+        Some(Commands::Info) => print_info(),
+        Some(Commands::Fmt) => checker::format_code(),
+        Some(Commands::Doc) => doc::generate_docs(),
+        Some(Commands::Check) => checker::check_code(),
+        Some(Commands::Update) => deps::update_dependencies(),
+        Some(Commands::Upgrade) => upgrade::check_and_upgrade(),
+        Some(Commands::Init) => init_project(),
+        Some(Commands::Cache { op }) => match op {
             CacheOp::Clean => cache::clean(),
             CacheOp::Ls => cache::list(),
             CacheOp::Path => cache::print_path(),
         },
-        Commands::Completion { shell } => {
+        Some(Commands::Completion { shell }) => {
             let mut cmd = Cli::command();
             let bin_name = cmd.get_name().to_string();
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
             Ok(())
         }
-        Commands::Toolchain { op } => handle_toolchain_command(op),
-        Commands::Doctor => run_doctor(),
+        Some(Commands::Toolchain { op }) => handle_toolchain_command(op),
+        Some(Commands::Doctor) => run_doctor(),
+        Some(Commands::Vendor) => deps::vendor_dependencies(),
+        Some(Commands::CI) => ci::generate_ci_config(),
+        Some(Commands::Docker) => docker::generate_docker_config(),
+        Some(Commands::SetupIde) => ide::generate_ide_config(),
+        Some(Commands::Tree) => tree::print_tree(),
+        Some(Commands::Stats) => stats::print_stats(),
+        None => {
+            print_splash();
+            Ok(())
+        }
     }
+}
+
+fn print_splash() {
+    println!();
+    println!(
+        "   {}",
+        "▄▄▄       ▄▄▄▄▄      ▄▄▄   ▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄ ".cyan()
+    );
+    println!(
+        "   {}",
+        "█  █     █     █     █  █ █  █  █         █ ".cyan()
+    );
+    println!(
+        "   {}",
+        "█  █     █  ▄  █      █ ▄▄▄ █   █  ▄▄▄▄▄▄▄█ ".cyan()
+    );
+    println!(
+        "   {}",
+        "█  █     █  █  █       █   █    █  █▄▄▄▄▄   ".cyan()
+    );
+    println!(
+        "   {}",
+        "█  █     █  █  █      █ ▄▄▄ █   █         █ ".cyan()
+    );
+    println!(
+        "   {}",
+        "█  █▄▄▄  █  █  █     █  █ █  █  █  ▄▄▄▄▄▄▄█ ".cyan()
+    );
+    println!(
+        "   {}",
+        "█      █ █  █  █    █  █   █  █ █  █        ".cyan()
+    );
+    println!(
+        "   {}",
+        "▀▀▀▀▀▀▀  ▀▀▀   ▀▀▀  ▀▀▀     ▀▀▀ ▀▀▀         ".cyan()
+    );
+    println!();
+    println!(
+        "   {}",
+        "The Modern C/C++ Project Manager".dimmed().italic()
+    );
+    println!("   {}", format!("v{}", env!("CARGO_PKG_VERSION")).green());
+    println!();
+
+    // Command Dashboard
+    let mut table = ui::Table::new(&["Category", "Commands"]);
+
+    table.add_row(vec![
+        "Start".bold().green().to_string(),
+        format!("{}, {}", "new".cyan(), "init".cyan()),
+    ]);
+    table.add_row(vec![
+        "Build".bold().yellow().to_string(),
+        format!(
+            "{}, {}, {}, {}",
+            "build".cyan(),
+            "run".cyan(),
+            "test".cyan(),
+            "watch".cyan()
+        ),
+    ]);
+    table.add_row(vec![
+        "Deps".bold().blue().to_string(),
+        format!(
+            "{}, {}, {}, {}, {}",
+            "add".cyan(),
+            "remove".cyan(),
+            "search".cyan(),
+            "vendor".cyan(),
+            "tree".cyan()
+        ),
+    ]);
+    table.add_row(vec![
+        "Tools".bold().magenta().to_string(),
+        format!(
+            "{}, {}, {}, {}, {}",
+            "fmt".cyan(),
+            "doc".cyan(),
+            "check".cyan(),
+            "docker".cyan(),
+            "stats".cyan()
+        ),
+    ]);
+    table.add_row(vec![
+        "Config".bold().white().to_string(),
+        format!(
+            "{}, {}, {}",
+            "toolchain".cyan(),
+            "setup-ide".cyan(),
+            "config".dimmed()
+        ), // config is planned/implicit
+    ]);
+
+    table.print();
+    println!();
+    println!("   Run {} for detailed usage.", "cx --help".white().bold());
+    println!();
 }
 
 fn init_project() -> Result<()> {
@@ -211,7 +401,45 @@ fn init_project() -> Result<()> {
         return Ok(());
     }
 
-    // 2. Interactive Inputs
+    // 2. Check for existing project structure for Import
+    let current_dir = std::env::current_dir()?;
+    let has_cmake = current_dir.join("CMakeLists.txt").exists();
+    let has_src = current_dir.join("src").exists();
+    let has_sources = std::fs::read_dir(&current_dir)
+        .map(|read_dir| {
+            read_dir.filter_map(|e| e.ok()).any(|e| {
+                let p = e.path();
+                if let Some(ext) = p.extension() {
+                    let s = ext.to_string_lossy();
+                    s == "cpp" || s == "c" || s == "cc"
+                } else {
+                    false
+                }
+            })
+        })
+        .unwrap_or(false);
+
+    if has_cmake || has_src || has_sources {
+        println!("{}", "Existing C/C++ project detected!".bold().yellow());
+        let confirm = inquire::Confirm::new("Generate cx.toml automatically from this project?")
+            .with_default(true)
+            .prompt()?;
+
+        if confirm {
+            if let Some(config) = import::scan_project(&current_dir)? {
+                let toml_str = toml::to_string(&config)?;
+                fs::write("cx.toml", toml_str)?;
+                println!(
+                    "{} Imported project successfully. Run {} to build.",
+                    "✓".green(),
+                    "cx run".bold().white()
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    // 3. Interactive Inputs
     let current_dir = std::env::current_dir()?;
     let dir_name = current_dir
         .file_name()
@@ -725,229 +953,62 @@ fn handle_toolchain_command(op: &Option<ToolchainOp>) -> Result<()> {
                         println!("{} Cleared toolchain selection", "✓".green());
                     }
                 } else {
-                    println!("{} No toolchain selection cached", "ℹ".blue());
+                    println!("{} No selection cached.", "!".yellow());
                 }
-
-                // Also clear the toolchain cache
-                toolchain::clear_toolchain_cache();
-                println!("{} Cleared toolchain cache", "✓".green());
             }
         }
-    }
-
-    #[cfg(not(windows))]
-    {
-        println!(
-            "{} Toolchain selection is currently Windows-only",
-            "ℹ".blue()
-        );
-        println!("  On Unix, the default clang++ or g++ from PATH is used.");
     }
 
     Ok(())
 }
 
 fn run_doctor() -> Result<()> {
-    println!();
-    println!("{}", "Doctor Summary".bold().cyan());
-    println!("{}", "═".repeat(50));
+    println!("{} Running System Doctor...", "🚑".red());
+    println!("-------------------------------");
 
-    let mut issues: Vec<String> = Vec::new();
-    let mut suggestions: Vec<String> = Vec::new();
-
-    // === Toolchain Check ===
-    println!("\n{}", "Toolchain:".bold());
+    print!("Checking OS... ");
+    println!(
+        "{} ({})",
+        std::env::consts::OS.green(),
+        std::env::consts::ARCH.cyan()
+    );
 
     #[cfg(windows)]
     {
-        use toolchain::windows::discover_all_toolchains;
-
-        let toolchains = discover_all_toolchains();
-        if toolchains.is_empty() {
-            println!("  {} No C/C++ toolchain found", "[✗]".red());
-            issues.push("No C/C++ compiler detected".to_string());
-            suggestions.push("Install Visual Studio Build Tools or LLVM".to_string());
-        } else {
-            // Show first (default) toolchain
-            if let Some(tc) = toolchains.first() {
-                println!("  {} {} ({})", "[✓]".green(), tc.display_name, tc.source);
+        print!("Checking MSVC... ");
+        let toolchains = toolchain::windows::discover_all_toolchains();
+        if !toolchains.is_empty() {
+            println!("{}", "Found".green());
+            for tc in toolchains {
+                println!("  - {} ({})", tc.display_name, tc.version);
             }
-            println!(
-                "  {} {} toolchains available (run {} to see all)",
-                "[✓]".green(),
-                toolchains.len(),
-                "cx info".cyan()
-            );
+        } else {
+            println!("{}", "Not Found (Install Visual Studio Build Tools)".red());
         }
     }
 
-    #[cfg(not(windows))]
+    print!("Checking Git... ");
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_ok()
     {
-        // Check for clang++ or g++
-        let compilers = [("clang++", "Clang"), ("g++", "GCC")];
-        let mut found = false;
-        for (bin, name) in compilers {
-            if let Ok(output) = std::process::Command::new(bin).arg("--version").output() {
-                if output.status.success() {
-                    let ver = String::from_utf8_lossy(&output.stdout);
-                    let first_line = ver.lines().next().unwrap_or("").trim();
-                    println!("  {} {} - {}", "[✓]".green(), name, first_line);
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if !found {
-            println!("  {} No C/C++ compiler found", "[✗]".red());
-            issues.push("No C/C++ compiler detected".to_string());
-            suggestions.push("Install clang++ or g++".to_string());
-        }
-    }
-
-    // === Build Tools Check ===
-    println!("\n{}", "Build Tools:".bold());
-
-    let tools = [
-        ("cmake", "CMake", true),
-        ("make", "Make", false),
-        ("ninja", "Ninja", false),
-        ("git", "Git", true),
-    ];
-
-    let mut table = ui::Table::new(&["Status", "Tool", "Details"]);
-    for (bin, name, required) in tools {
-        let output = std::process::Command::new(bin).arg("--version").output();
-        match output {
-            Ok(out) if out.status.success() => {
-                let ver = String::from_utf8_lossy(&out.stdout);
-                let first_line = ver.lines().next().unwrap_or("").trim();
-                let short = if first_line.len() > 40 {
-                    &first_line[..40]
-                } else {
-                    first_line
-                };
-                table.add_row(vec![
-                    "✓".green().to_string(),
-                    name.to_string(),
-                    short.to_string(),
-                ]);
-            }
-            _ => {
-                if required {
-                    table.add_row(vec![
-                        "x".red().to_string(),
-                        name.to_string(),
-                        "Not found".to_string(),
-                    ]);
-                    issues.push(format!("{} not found", name));
-                    suggestions.push(format!("Install {}", name));
-                } else {
-                    table.add_row(vec![
-                        "!".yellow().to_string(),
-                        name.to_string(),
-                        "Not found (optional)".to_string(),
-                    ]);
-                }
-            }
-        }
-    }
-    table.print();
-
-    // === Project Check ===
-    println!("\n{}", "Project:".bold());
-
-    let cx_toml_exists = Path::new("cx.toml").exists();
-    if cx_toml_exists {
-        println!("  {} cx.toml found", "[✓]".green());
-
-        // Validate cx.toml
-        match build::load_config() {
-            Ok(config) => {
-                println!("  {} Config valid", "[✓]".green());
-
-                // Check package info
-                {
-                    let pkg = &config.package;
-                    println!(
-                        "  {} Package: {} v{}",
-                        "[✓]".green(),
-                        pkg.name.cyan(),
-                        pkg.version
-                    );
-                }
-
-                // Check compiler setting
-                if let Some(build_cfg) = &config.build {
-                    if let Some(compiler) = &build_cfg.compiler {
-                        println!("  {} Compiler: {}", "[✓]".green(), compiler.cyan());
-                    } else {
-                        println!("  {} No compiler specified (using default)", "[!]".yellow());
-                        suggestions.push("Run 'cx toolchain' to select a compiler".to_string());
-                    }
-                }
-
-                // Check dependencies
-                if let Some(deps) = &config.dependencies {
-                    let dep_count = deps.len();
-                    if dep_count > 0 {
-                        println!("  {} {} dependencies", "[✓]".green(), dep_count);
-                    } else {
-                        println!("  {} No dependencies", "[!]".yellow());
-                    }
-                } else {
-                    println!("  {} No dependencies section", "[!]".yellow());
-                }
-            }
-            Err(e) => {
-                println!("  {} cx.toml parse error: {}", "[✗]".red(), e);
-                issues.push("cx.toml is invalid".to_string());
-                suggestions.push("Check cx.toml syntax".to_string());
-            }
-        }
-
-        // Check src directory
-        if Path::new("src").exists() {
-            let has_main = Path::new("src/main.cpp").exists()
-                || Path::new("src/main.c").exists()
-                || Path::new("src/main.cc").exists();
-            if has_main {
-                println!("  {} Source files found", "[✓]".green());
-            } else {
-                println!("  {} No main.cpp/main.c in src/", "[!]".yellow());
-                suggestions.push("Create src/main.cpp with your entry point".to_string());
-            }
-        } else {
-            println!("  {} src/ directory missing", "[✗]".red());
-            issues.push("No src/ directory".to_string());
-            suggestions.push("Create src/ directory with source files".to_string());
-        }
+        println!("{}", "Found".green());
     } else {
-        println!("  {} Not in a cx project (no cx.toml)", "[!]".yellow());
-        println!(
-            "       Run {} to create a new project",
-            "cx new <name>".cyan()
-        );
+        println!("{}", "Not Found (Install Git)".red());
     }
 
-    // === Summary ===
-    println!("\n{}", "═".repeat(50));
-
-    if issues.is_empty() {
-        println!("{}", "✓ No issues found!".green().bold());
+    // Check CMake
+    print!("Checking CMake... ");
+    if std::process::Command::new("cmake")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        println!("{}", "Found".green());
     } else {
-        println!("{} {} issue(s) found:", "✗".red(), issues.len());
-        for issue in &issues {
-            println!("  • {}", issue.red());
-        }
+        println!("{}", "Not Found (Optional)".yellow());
     }
 
-    if !suggestions.is_empty() {
-        println!("\n{}", "Suggestions:".bold());
-        for suggestion in &suggestions {
-            println!("  • {}", suggestion.yellow());
-        }
-    }
-
-    println!();
     Ok(())
 }
