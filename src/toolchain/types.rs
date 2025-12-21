@@ -129,8 +129,10 @@ pub struct VSInstallation {
 pub enum ToolchainError {
     /// No suitable toolchain found
     NotFound(String),
+    #[cfg(windows)]
     /// Error running vswhere
     VsWhereError(String),
+    #[cfg(windows)]
     /// Error loading vcvars environment
     VcVarsError(String),
     /// IO error
@@ -141,7 +143,9 @@ impl std::fmt::Display for ToolchainError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ToolchainError::NotFound(msg) => write!(f, "Toolchain not found: {}", msg),
+            #[cfg(windows)]
             ToolchainError::VsWhereError(msg) => write!(f, "vswhere error: {}", msg),
+            #[cfg(windows)]
             ToolchainError::VcVarsError(msg) => write!(f, "vcvars error: {}", msg),
             ToolchainError::IoError(e) => write!(f, "IO error: {}", e),
         }

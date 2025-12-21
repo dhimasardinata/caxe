@@ -737,12 +737,12 @@ fn print_info() -> Result<()> {
     Ok(())
 }
 
-fn handle_toolchain_command(op: &Option<ToolchainOp>) -> Result<()> {
+fn handle_toolchain_command(_op: &Option<ToolchainOp>) -> Result<()> {
     #[cfg(windows)]
     {
         use toolchain::windows::discover_all_toolchains;
 
-        match op {
+        match _op {
             Some(ToolchainOp::List) => {
                 let toolchains = discover_all_toolchains();
                 if toolchains.is_empty() {

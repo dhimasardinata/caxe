@@ -145,7 +145,12 @@ mod tests {
         assert_eq!(config.package.edition, "c++20");
         let build_cfg = config.build.as_ref().unwrap();
         let compiler = build_cfg.compiler.as_ref().unwrap();
-        assert!(compiler.contains("msvc") || compiler.contains("clang"));
+        assert!(
+            compiler.contains("msvc")
+                || compiler.contains("clang")
+                || compiler.contains("gcc")
+                || compiler.contains("g++")
+        );
 
         // cleanup
         fs::remove_dir_all(&temp_dir)?;
