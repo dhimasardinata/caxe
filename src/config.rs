@@ -51,6 +51,7 @@ pub struct BuildConfig {
     pub bin: Option<String>,
     pub cflags: Option<Vec<String>>,
     pub libs: Option<Vec<String>>,
+    pub sources: Option<Vec<String>>,
     pub pch: Option<String>,
 }
 
@@ -62,4 +63,34 @@ fn default_edition() -> String {
 pub struct ScriptsConfig {
     pub pre_build: Option<String>,
     pub post_build: Option<String>,
+}
+
+pub fn create_ephemeral_config(
+    name: &str,
+    bin_name: &str,
+    compiler: &str,
+    has_cpp: bool,
+) -> CxConfig {
+    CxConfig {
+        package: PackageConfig {
+            name: name.to_string(),
+            version: "0.0.0".to_string(),
+            edition: if has_cpp {
+                "c++20".to_string()
+            } else {
+                "c17".to_string()
+            },
+        },
+        build: Some(BuildConfig {
+            compiler: Some(compiler.to_string()),
+            bin: Some(bin_name.to_string()),
+            cflags: None,
+            libs: None,
+            sources: Some(vec![name.to_string()]),
+            pch: None,
+        }),
+        dependencies: None,
+        scripts: None,
+        test: None,
+    }
 }

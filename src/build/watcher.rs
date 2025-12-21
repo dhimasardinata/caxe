@@ -41,7 +41,7 @@ fn run_and_clear(run_tests: bool) {
     let result = if run_tests {
         super::test::run_tests(None)
     } else {
-        core::build_and_run(false, false, false, &[])
+        core::build_and_run(false, false, false, vec![], None)
     };
 
     if let Err(e) = result {

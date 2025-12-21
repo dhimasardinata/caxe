@@ -224,15 +224,34 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     let mut source_files = Vec::new();
     let mut has_cpp = false;
 
-    for entry in WalkDir::new("src").into_iter().filter_map(|e| e.ok()) {
-        let path = entry.path();
-        if let Some(ext) = path.extension() {
-            let s = ext.to_string_lossy();
-            if ["cpp", "cc", "cxx", "c"].contains(&s.as_ref()) {
-                if s != "c" {
-                    has_cpp = true;
+    if let Some(build_cfg) = &config.build
+        && let Some(explicit_sources) = &build_cfg.sources
+    {
+        for src in explicit_sources {
+            let path = Path::new(src);
+            if path.exists() {
+                if let Some(ext) = path.extension() {
+                    let s = ext.to_string_lossy();
+                    if s != "c" {
+                        has_cpp = true;
+                    }
+                    source_files.push(path.to_owned());
                 }
-                source_files.push(path.to_owned());
+            } else {
+                println!("{} Source file not found: {}", "!".yellow(), src);
+            }
+        }
+    } else {
+        for entry in WalkDir::new("src").into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if let Some(ext) = path.extension() {
+                let s = ext.to_string_lossy();
+                if ["cpp", "cc", "cxx", "c"].contains(&s.as_ref()) {
+                    if s != "c" {
+                        has_cpp = true;
+                    }
+                    source_files.push(path.to_owned());
+                }
             }
         }
     }
@@ -868,10 +887,138 @@ pub fn build_and_run(
     release: bool,
     verbose: bool,
     dry_run: bool,
-    run_args: &[String],
+    run_args: Vec<String>,
+    script_path: Option<String>,
 ) -> Result<()> {
-    // Load config once here
-    let config = load_config()?;
+    // 1. Determine Configuration
+    let config = if let Some(path_str) = &script_path {
+        // SCENARIO 1: Explicit Script Mode (e.g. `cx run 1.cpp`)
+        let path = Path::new(path_str);
+
+        // Implicit src/ lookup: check "src/<file>" if <file> doesn't exist
+        let final_path = if !path.exists() && Path::new("src").join(path).exists() {
+            Path::new("src").join(path)
+        } else {
+            path.to_path_buf()
+        };
+
+        if !final_path.exists() {
+            // Fallback: Check if it's just a name without extension?
+            // For now, strict check.
+            anyhow::bail!("Script file not found: {}", path_str);
+        }
+
+        if verbose {
+            eprintln!("{} Script Mode: {}", "⚡".yellow(), final_path.display());
+        }
+
+        let file_stem = final_path.file_stem().unwrap_or_default().to_string_lossy();
+
+        let has_cpp = final_path.extension().is_some_and(|ext| {
+            let s = ext.to_string_lossy();
+            s == "cpp" || s == "cc" || s == "cxx"
+        });
+
+        // Use 'auto' - compiler detection happens inside build_project
+        let mut cfg =
+            crate::config::create_ephemeral_config(&file_stem, &file_stem, "auto", has_cpp);
+
+        // Set explicit source path
+        if let Some(build_cfg) = &mut cfg.build {
+            build_cfg.sources = Some(vec![final_path.to_string_lossy().to_string()]);
+        }
+
+        cfg
+    } else {
+        // SCENARIO 2: Project Mode (cx.toml) OR Default Script
+        match load_config() {
+            Ok(c) => c,
+            Err(_) => {
+                // Check if the first arg is a potential script file
+                let maybe_script = run_args.first().and_then(|arg| {
+                    let p = Path::new(arg);
+                    if p.exists()
+                        && !p.is_dir()
+                        && p.extension().is_some_and(|ext| {
+                            let s = ext.to_string_lossy();
+                            ["cpp", "cc", "cxx", "c"].contains(&s.as_ref())
+                        })
+                    {
+                        Some(p.to_owned())
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(script) = maybe_script {
+                    if verbose {
+                        eprintln!(
+                            "{} Script Mode (from args): {}",
+                            "⚡".yellow(),
+                            script.display()
+                        );
+                    }
+                    let stem = script.file_stem().unwrap_or_default().to_string_lossy();
+                    let has_cpp = script.extension().is_some_and(|e| {
+                        let s = e.to_string_lossy();
+                        s == "cpp" || s == "cc" || s == "cxx"
+                    });
+
+                    let mut cfg = crate::config::create_ephemeral_config(
+                        &stem, &stem, "auto", // Let build_project detect
+                        has_cpp,
+                    );
+                    if let Some(build_cfg) = &mut cfg.build {
+                        build_cfg.sources = Some(vec![script.to_string_lossy().to_string()]);
+                    }
+                    cfg
+                } else {
+                    // Heuristics for default script (main.cpp etc)
+                    let candidates = ["main.cpp", "src/main.cpp", "main.c", "src/main.c"];
+
+                    let found = candidates.iter().find(|p| Path::new(p).exists());
+
+                    if let Some(p) = found {
+                        eprintln!("{} No cx.toml found, running: {}", "⚡".yellow(), p);
+                        let path = Path::new(p);
+                        let stem = path.file_stem().unwrap().to_string_lossy();
+                        let has_cpp = path.extension().is_some_and(|e| {
+                            let s = e.to_string_lossy();
+                            s == "cpp" || s == "cc" || s == "cxx"
+                        });
+
+                        let mut cfg =
+                            crate::config::create_ephemeral_config(&stem, &stem, "auto", has_cpp);
+                        if let Some(build_cfg) = &mut cfg.build {
+                            build_cfg.sources = Some(vec![p.to_string()]);
+                        }
+                        cfg
+                    } else {
+                        anyhow::bail!(
+                            "cx.toml not found, and no default source file (main.cpp/c) detected."
+                        );
+                    }
+                }
+            }
+        }
+    };
+
+    // Filter run_args: If the first argument matches the single source file in config (Script Mode via 'cx run script'),
+    // we should remove it so the script doesn't receive its own filename as an argument.
+    let run_args = if let Some(build) = &config.build
+        && let Some(sources) = &build.sources
+        && sources.len() == 1
+        && !run_args.is_empty()
+    {
+        // Simple string check is usually sufficient as we set sources from args[0]
+        if sources[0] == run_args[0] || Path::new(&sources[0]) == Path::new(&run_args[0]) {
+            run_args[1..].to_vec()
+        } else {
+            run_args
+        }
+    } else {
+        run_args
+    };
 
     let options = BuildOptions {
         release,
@@ -879,6 +1026,7 @@ pub fn build_and_run(
         dry_run,
         ..Default::default()
     };
+
     let success = build_project(&config, &options)?;
     if !success {
         return Ok(());
@@ -899,6 +1047,10 @@ pub fn build_and_run(
             bin_basename
         };
         let bin_path = Path::new("build").join(profile).join(&bin_name);
+
+        // If script mode and 'src/' lookup happened, path might be tricky for bin name logic?
+        // Ephemeral config uses file stem as bin name, so it should be fine.
+
         let bin_short = bin_path
             .file_name()
             .unwrap_or(bin_path.as_os_str())
@@ -909,8 +1061,6 @@ pub fn build_and_run(
             format!(" {}", run_args.join(" "))
         };
         println!("  → {}{}", bin_short.cyan(), args_str);
-
-        // Footer (build_project already showed the main one)
         return Ok(());
     }
 
@@ -929,10 +1079,25 @@ pub fn build_and_run(
 
     let bin_path = Path::new("build").join(profile).join(bin_name);
 
-    println!("{} Running...\n", "▶".green());
+    if !bin_path.exists() {
+        anyhow::bail!("Binary not found at {}", bin_path.display());
+    }
+
+    if verbose {
+        println!("{} Running: {}\n", "🚀".green(), bin_path.display());
+    } else {
+        println!("{} Running...\n", "▶".green());
+    }
+
     let mut run_cmd = Command::new(bin_path);
     run_cmd.args(run_args);
-    let _ = run_cmd.status();
+    let status = run_cmd.status()?;
+
+    if !status.success() {
+        // Don't error out, just return ok as we ran the program and it failed on its own terms
+        // unless we want to propagate exit code.
+        // Typically build tools separate build error vs run error.
+    }
 
     Ok(())
 }

@@ -30,6 +30,8 @@ mod upgrade;
 #[command(about = "The modern C/C++ project manager", version = env!("CARGO_PKG_VERSION"))]
 #[command(long_about = None)]
 #[command(propagate_version = true)]
+#[command(infer_subcommands = false)]
+#[command(allow_external_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -84,7 +86,7 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
         /// Arguments passed to the target program
-        #[arg(last = true)]
+        #[arg(num_args = 0.., allow_hyphen_values = true)]
         args: Vec<String>,
     },
     /// Add a dependency to the project
@@ -175,6 +177,9 @@ enum Commands {
     Tree,
     /// Show project statistics
     Stats,
+    /// Run a C/C++ file directly (Script Mode)
+    #[command(external_subcommand)]
+    External(Vec<String>),
 }
 
 #[derive(Subcommand)]
@@ -248,7 +253,7 @@ fn main() -> Result<()> {
             verbose,
             dry_run,
             args,
-        }) => build::build_and_run(*release, *verbose, *dry_run, args),
+        }) => build::build_and_run(*release, *verbose, *dry_run, args.clone(), None),
 
         Some(Commands::Watch { test }) => build::watch(*test),
         Some(Commands::Clean { cache, all, unused }) => build::clean(*cache, *all, *unused),
@@ -286,6 +291,17 @@ fn main() -> Result<()> {
         Some(Commands::SetupIde) => ide::generate_ide_config(),
         Some(Commands::Tree) => tree::print_tree(),
         Some(Commands::Stats) => stats::print_stats(),
+        Some(Commands::External(args)) => {
+            if args.is_empty() {
+                anyhow::bail!("No command provided");
+            }
+            // Treat args[0] as script path, args[1..] as run args
+            let script_path = Some(args[0].clone());
+            let run_args = args[1..].to_vec();
+
+            // Script mode defaults: release=false, verbose=false, dry_run=false
+            build::build_and_run(false, false, false, run_args, script_path)
+        }
         None => {
             print_splash();
             Ok(())

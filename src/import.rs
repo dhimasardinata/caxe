@@ -111,6 +111,7 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
             bin: Some("app".to_string()),
             cflags: Some(cflags),
             libs: None, // Hard to guess libs from source
+            sources: None,
             pch: None,
         }),
         dependencies: None, // Hard to guess deps
