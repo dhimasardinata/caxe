@@ -6,24 +6,25 @@ use inquire::{Select, Text};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-mod build;
-mod cache;
-mod checker;
-mod ci;
-mod config;
-mod deps;
-mod doc;
-mod docker;
-mod ide;
-mod import;
-mod lock;
-mod registry;
-mod stats;
-mod templates;
-mod toolchain;
-mod tree;
-mod ui;
-mod upgrade;
+use caxe::build;
+
+use caxe::cache;
+use caxe::checker;
+use caxe::ci;
+use caxe::deps;
+use caxe::doc;
+use caxe::docker;
+use caxe::ide;
+use caxe::import;
+use caxe::lock;
+use caxe::package;
+use caxe::registry;
+use caxe::stats;
+use caxe::templates;
+use caxe::toolchain;
+use caxe::tree;
+use caxe::ui;
+use caxe::upgrade;
 
 #[derive(Parser)]
 #[command(name = "cx")]
@@ -102,6 +103,26 @@ enum Commands {
         /// Specific git revision
         #[arg(long)]
         rev: Option<String>,
+    },
+    /// Manage the dependency lockfile
+    Lock {
+        /// Update the lockfile to the latest compatible versions
+        #[arg(long)]
+        update: bool,
+        /// Verify that the lockfile is in sync with cx.toml
+        #[arg(long)]
+        check: bool,
+    },
+    /// Synchronize dependencies with lockfile
+    Sync,
+    /// Package the application for distribution
+    Package {
+        /// Output filename (default: <project_name>-v<version>.zip)
+        #[arg(long, short)]
+        output: Option<String>,
+        /// Build release before packaging (default: true)
+        #[arg(long, default_value_t = true)]
+        release: bool,
     },
     /// Remove a dependency from cx.toml
     Remove {
@@ -200,6 +221,11 @@ enum ToolchainOp {
     Select,
     /// Clear cached toolchain selection
     Clear,
+    /// Install a portable toolchain (e.g., mingw)
+    Install {
+        /// Name of the toolchain to install
+        name: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -226,6 +252,20 @@ fn main() -> Result<()> {
             Ok(())
         }
 
+        Some(Commands::Lock { update, check }) => {
+            handle_lock(*update, *check);
+            Ok(())
+        }
+
+        Some(Commands::Sync) => {
+            handle_sync();
+            Ok(())
+        }
+
+        Some(Commands::Package { output, release }) => {
+            package::package_project(output.clone(), *release)
+        }
+
         Some(Commands::Build {
             release,
             verbose,
@@ -245,7 +285,63 @@ fn main() -> Result<()> {
                 lto: *lto,
                 sanitize: sanitize.clone(),
             };
-            build::build_project(&config, &options).map(|_| ())
+
+            // Workspace Support
+            if let Some(ws) = &config.workspace {
+                println!(
+                    "{} Building Workspace ({} members)...",
+                    "🚀".cyan(),
+                    ws.members.len()
+                );
+                let root_dir = std::env::current_dir()?;
+
+                for member in &ws.members {
+                    let member_path = root_dir.join(member);
+                    if !member_path.exists() {
+                        println!("{} Member '{}' not found", "x".red(), member);
+                        continue;
+                    }
+
+                    println!("\n{} Building member: {}", "📦".blue(), member);
+                    std::env::set_current_dir(&member_path)?;
+
+                    // Reload config for member
+                    match build::load_config() {
+                        Ok(member_config) => {
+                            if let Err(e) = build::build_project(&member_config, &options) {
+                                println!("{} Build failed for {}: {}", "x".red(), member, e);
+                                // Continue or exit? Usually fail fast?
+                                std::env::set_current_dir(&root_dir)?;
+                                std::process::exit(1);
+                            }
+                        }
+                        Err(e) => {
+                            println!("{} Failed to load config for {}: {}", "x".red(), member, e);
+                            std::env::set_current_dir(&root_dir)?;
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                // Restore root (though we are done/exiting)
+                std::env::set_current_dir(&root_dir)?;
+
+                // Also build root if it has sources?
+                // Logic: If [package] exists (mandatory currently) and has sources, build it?
+                // Usually workspace root is just a container.
+                // We'll check if root has `src` dir or explicit sources.
+                // If not, we skip root build silently.
+                // But build_project checks sources.
+                // Let's just try to build root if user explicitly asks?
+                // Or maybe the workspace config implies *only* members?
+                // Let's assume root is strictly a workspace manager if [workspace] present, UNLESS it has src/main.cpp?
+                // Safe bet: Don't auto-build root if it's a workspace, unless it looks like a project.
+                // But `config` is loaded.
+                // We can't easily skip it without modifying `build_project`.
+                // Let's just finish here. The loop built the members.
+                Ok(())
+            } else {
+                build::build_project(&config, &options).map(|_| ())
+            }
         }
 
         Some(Commands::Run {
@@ -942,7 +1038,19 @@ fn handle_toolchain_command(_op: &Option<ToolchainOp>) -> Result<()> {
                     println!("{} No selection cached.", "!".yellow());
                 }
             }
+
+            Some(ToolchainOp::Install { name }) => {
+                toolchain::install::install_toolchain(name.clone())?;
+            }
         }
+    }
+
+    #[cfg(not(windows))]
+    {
+        println!(
+            "{} Toolchain management is currently Windows-only.",
+            "!".yellow()
+        );
     }
 
     Ok(())
@@ -997,4 +1105,83 @@ fn run_doctor() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn handle_lock(update: bool, check: bool) {
+    if check {
+        println!("{} Verifying lockfile...", "🔒".blue());
+        match lock::LockFile::load() {
+            Ok(lockfile) => match build::load_config() {
+                Ok(config) => {
+                    let mut success = true;
+                    if let Some(deps) = config.dependencies {
+                        for (name, _) in deps {
+                            if lockfile.get(&name).is_none() {
+                                println!(
+                                    "{} Dependency '{}' missing from cx.lock",
+                                    "x".red(),
+                                    name
+                                );
+                                success = false;
+                            }
+                        }
+                    }
+                    if success {
+                        println!("{} Lockfile is in sync.", "✓".green());
+                    } else {
+                        println!(
+                            "{} Lockfile out of sync. Run 'cx lock --update'.",
+                            "x".red()
+                        );
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error loading config: {}", e);
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!("Error loading lockfile: {}", e);
+                std::process::exit(1);
+            }
+        }
+    } else if update {
+        println!("{} Updating lockfile...", "🔄".blue());
+        if let Err(e) = deps::update_dependencies() {
+            eprintln!("Error updating dependencies: {}", e);
+            std::process::exit(1);
+        }
+    } else {
+        println!("Use --check to verify or --update to update/regenerate.");
+    }
+}
+
+fn handle_sync() {
+    println!(
+        "{} Synchronizing dependencies with lockfile...",
+        "📦".blue()
+    );
+    // 1. Load Config to check if we even have deps
+    match build::load_config() {
+        Ok(config) => {
+            if let Some(deps) = config.dependencies {
+                // 2. Fetch/Sync
+                // fetch_dependencies handles reading cx.lock and checking out specific revisions
+                match deps::fetch_dependencies(&deps) {
+                    Ok(_) => println!("{} Dependencies synchronized.", "✓".green()),
+                    Err(e) => {
+                        eprintln!("Error synchronizing: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                println!("No dependencies found in cx.toml.");
+            }
+        }
+        Err(e) => {
+            eprintln!("Error loading config: {}", e);
+            std::process::exit(1);
+        }
+    }
 }

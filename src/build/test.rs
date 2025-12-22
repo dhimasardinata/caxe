@@ -37,12 +37,13 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     let mut dep_libs = Vec::new();
 
     if let Some(deps) = &config.dependencies
-        && !deps.is_empty() {
-            let (paths, cflags, libs) = crate::deps::fetch_dependencies(deps)?;
-            include_paths = paths;
-            extra_cflags = cflags;
-            dep_libs = libs;
-        }
+        && !deps.is_empty()
+    {
+        let (paths, cflags, libs) = crate::deps::fetch_dependencies(deps)?;
+        include_paths = paths;
+        extra_cflags = cflags;
+        dep_libs = libs;
+    }
 
     println!("{} Running tests...", "🧪".magenta());
     if let Some(f) = &filter {
@@ -76,9 +77,9 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     let mut test_files = Vec::new();
     for entry in WalkDir::new(test_dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path().to_path_buf();
-        let is_cpp = path.extension().is_some_and(|ext| {
-            ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap())
-        });
+        let is_cpp = path
+            .extension()
+            .is_some_and(|ext| ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap()));
         let is_c = path.extension().is_some_and(|ext| ext == "c");
 
         if is_cpp || is_c {
@@ -95,6 +96,120 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
 
     if test_files.is_empty() {
         println!("{} No tests found.", "!".yellow());
+        return Ok(());
+    }
+
+    // Check for Single Binary Mode
+    // If enabled, we compile ALL test sources into ONE executable (runner)
+    let single_binary = config
+        .test
+        .as_ref()
+        .and_then(|t| t.single_binary)
+        .unwrap_or(false);
+
+    if single_binary {
+        println!("{} Building single test runner...", "🔨".cyan());
+        let runner_name = "test_runner";
+        let output_bin = format!("build/tests/{}", runner_name); // Linux/Mac
+
+        let compiler = get_compiler(&config, true); // Assume C++ for tests generally
+        let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
+
+        let mut cmd = Command::new(&compiler);
+        let mut args = Vec::new();
+
+        if is_msvc {
+            args.push("/nologo".to_string());
+            args.push("/EHsc".to_string());
+            args.push(format!("/Fe{}", output_bin));
+            args.push(format!("/std:{}", config.package.edition));
+
+            // Includes
+            for p in &include_paths {
+                args.push(format!("/I{}", p.display()));
+            }
+            args.push("/Isrc".to_string());
+
+            // Sources
+            for (path, _) in &test_files {
+                args.push(path.to_string_lossy().to_string());
+            }
+            // Project Objects
+            for obj in &project_objs {
+                args.push(obj.to_string_lossy().to_string());
+            }
+
+            // Libs
+            args.push("/link".to_string());
+            for lib in &dep_libs {
+                args.push(lib.clone());
+            }
+        } else {
+            args.push(format!("-std={}", config.package.edition));
+            args.push("-o".to_string());
+            args.push(output_bin.clone());
+
+            // Includes
+            for p in &include_paths {
+                args.push(format!("-I{}", p.display()));
+            }
+            args.push("-Isrc".to_string());
+
+            // Sources
+            for (path, _) in &test_files {
+                args.push(path.to_string_lossy().to_string());
+            }
+            // Project Objects
+            for obj in &project_objs {
+                args.push(obj.to_string_lossy().to_string());
+            }
+
+            // Libs
+            for lib in &dep_libs {
+                args.push(lib.clone());
+            }
+            if let Some(cfg) = &config.build
+                && let Some(libs) = &cfg.libs
+            {
+                for lib in libs {
+                    args.push(format!("-l{}", lib));
+                }
+            }
+        }
+
+        cmd.args(&args);
+
+        // Execute Compilation
+        let start = std::time::Instant::now();
+        let output = cmd.output()?;
+        if !output.status.success() {
+            println!("{} Test Runner Compilation Failed:", "x".red());
+            println!("{}", String::from_utf8_lossy(&output.stdout));
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+            return Ok(());
+        }
+        println!("   {} Compiled in {:.2?}s", "✓".green(), start.elapsed());
+
+        // Run It
+        println!("{} Running tests...", "🚀".cyan());
+        let run_path = if cfg!(target_os = "windows") {
+            format!("{}.exe", output_bin)
+        } else {
+            format!("./{}", output_bin)
+        };
+
+        let mut run_cmd = Command::new(&run_path);
+        // Pass filter as argument if present (standard for Catch2/GTest/doctest)
+        if let Some(f) = &filter {
+            run_cmd.arg(f);
+        }
+
+        let status = run_cmd.status()?;
+        if status.success() {
+            println!("{}", "TESTS PASSED".green().bold());
+        } else {
+            println!("{}", "TESTS FAILED".red().bold());
+        }
         return Ok(());
     }
 
@@ -174,9 +289,10 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
             cmd.args(&extra_cflags);
 
             if let Some(build_cfg) = &config.build
-                && let Some(flags) = &build_cfg.cflags {
-                    cmd.args(flags);
-                }
+                && let Some(flags) = &build_cfg.cflags
+            {
+                cmd.args(flags);
+            }
 
             // Link Libs & Project Objects
             if is_msvc {
@@ -190,15 +306,16 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
             }
 
             if let Some(build_cfg) = &config.build
-                && let Some(libs) = &build_cfg.libs {
-                    for lib in libs {
-                        if is_msvc {
-                            cmd.arg(format!("{}.lib", lib));
-                        } else {
-                            cmd.arg(format!("-l{}", lib));
-                        }
+                && let Some(libs) = &build_cfg.libs
+            {
+                for lib in libs {
+                    if is_msvc {
+                        cmd.arg(format!("{}.lib", lib));
+                    } else {
+                        cmd.arg(format!("-l{}", lib));
                     }
                 }
+            }
 
             let output = cmd.output();
             let success = match output {

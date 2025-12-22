@@ -117,6 +117,7 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
         dependencies: None, // Hard to guess deps
         scripts: None,
         test: None,
+        workspace: None,
     };
 
     Ok(Some(config))

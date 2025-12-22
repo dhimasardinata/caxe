@@ -1,6 +1,7 @@
 //! Windows-specific toolchain discovery using vswhere and vcvars
 
 use super::types::{CompilerType, Toolchain, ToolchainError, VSInstallation};
+use colored::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -368,20 +369,90 @@ fn get_compiler_version(compiler_path: &Path, is_msvc: bool) -> String {
 
 /// Main entry point: detect the best available toolchain
 pub fn detect_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, ToolchainError> {
-    // Try to find VS installations
+    // 1. Detect VS Installations
     let vs_installations = detect_vs_installations().unwrap_or_default();
 
-    if vs_installations.is_empty() {
-        return Err(ToolchainError::NotFound(
-            "No Visual Studio or Build Tools installation found.\n\
-             Please install Visual Studio Build Tools from:\n\
-             https://visualstudio.microsoft.com/visual-cpp-build-tools/\n\
-             Make sure to select 'Desktop development with C++' workload."
-                .to_string(),
-        ));
+    // 2. Detect Installed/PATH MinGW
+    let mut mingw_path = None;
+    if let Some(home) = dirs::home_dir() {
+        let p = home
+            .join(".cx")
+            .join("tools")
+            .join("mingw64")
+            .join("bin")
+            .join("g++.exe");
+        if p.exists() {
+            mingw_path = Some(p);
+        }
+    }
+    if mingw_path.is_none() {
+        // Try PATH
+        if let Ok(output) = std::process::Command::new("where").arg("g++").output()
+            && output.status.success()
+            && let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                mingw_path = Some(PathBuf::from(line.trim()));
+            }
     }
 
-    // Use the first (usually latest) installation
+    // 3. Selection Logic
+    match preferred {
+        Some(CompilerType::GCC) => {
+            if let Some(gxx) = mingw_path {
+                let version = get_compiler_version(&gxx, false);
+                return Ok(Toolchain {
+                    compiler_type: CompilerType::GCC,
+                    cc_path: gxx.with_file_name("gcc.exe"), // assume gcc next to g++
+                    cxx_path: gxx,
+                    linker_path: PathBuf::new(), // GCC handles linking
+                    version,
+                    msvc_toolset_version: None,
+                    windows_sdk_version: None,
+                    vs_install_path: None,
+                    env_vars: HashMap::new(),
+                });
+            } else {
+                return Err(ToolchainError::NotFound(
+                    "GCC/MinGW not found. Run 'cx toolchain install mingw'.".to_string(),
+                ));
+            }
+        }
+        Some(CompilerType::MSVC) => {
+            if vs_installations.is_empty() {
+                return Err(ToolchainError::NotFound(
+                    "Visual Studio not found.".to_string(),
+                ));
+            }
+        }
+        _ => {
+            // No preference, or Clang/ClangCL.
+            // If VS missing, can we fallback to GCC?
+            if vs_installations.is_empty() {
+                if let Some(gxx) = mingw_path {
+                    println!(
+                        "{} Visual Studio not found, falling back to MinGW.",
+                        "!".yellow()
+                    );
+                    let version = get_compiler_version(&gxx, false);
+                    return Ok(Toolchain {
+                        compiler_type: CompilerType::GCC,
+                        cc_path: gxx.with_file_name("gcc.exe"),
+                        cxx_path: gxx,
+                        linker_path: PathBuf::new(),
+                        version,
+                        msvc_toolset_version: None,
+                        windows_sdk_version: None,
+                        vs_install_path: None,
+                        env_vars: HashMap::new(),
+                    });
+                }
+                return Err(ToolchainError::NotFound(
+                    "No suitable compiler found (VS or MinGW).".to_string(),
+                ));
+            }
+        }
+    }
+
+    // VS is present if we got here (unless we returned GCC)
     let vs = &vs_installations[0];
 
     // Load vcvars environment
@@ -458,12 +529,7 @@ pub fn detect_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, To
                 (CompilerType::MSVC, cl.clone(), cl)
             }
         }
-        Some(CompilerType::GCC) => {
-            // GCC doesn't use VS - use PATH-based detection
-            return Err(ToolchainError::NotFound(
-                "Use PATH-based detection for GCC (Clang/GCC)".to_string(),
-            ));
-        }
+        Some(CompilerType::GCC) => unreachable!(), // Handled above
     };
 
     // Get linker path (link.exe for MSVC-compatible)
@@ -578,13 +644,38 @@ pub fn discover_all_toolchains() -> Vec<AvailableToolchain> {
         });
     }
 
-    // 3. GCC from PATH (MSYS2/MinGW)
+    // 3. Installed MinGW (via caxe)
+    if let Some(home) = dirs::home_dir() {
+        let mingw_bin = home
+            .join(".cx")
+            .join("tools")
+            .join("mingw64")
+            .join("bin")
+            .join("g++.exe");
+        if mingw_bin.exists() {
+            let version = get_compiler_version(&mingw_bin, false);
+            toolchains.push(AvailableToolchain {
+                display_name: "GCC (g++.exe)".to_string(),
+                compiler_type: CompilerType::GCC,
+                path: mingw_bin,
+                version,
+                source: "Max/MinGW (WinLibs)".to_string(),
+            });
+        }
+    }
+
+    // 4. GCC from PATH (MSYS2/MinGW)
     if let Ok(output) = std::process::Command::new("where").arg("g++").output()
         && output.status.success()
     {
         let paths = String::from_utf8_lossy(&output.stdout);
         for line in paths.lines() {
             let path = PathBuf::from(line.trim());
+            // Avoid duplicates if PATH includes the installed one
+            if toolchains.iter().any(|t| t.path == path) {
+                continue;
+            }
+
             if path.exists() {
                 let version = get_compiler_version(&path, false);
                 let source = if line.contains("msys64") {

@@ -8,12 +8,19 @@ pub struct CxConfig {
     pub build: Option<BuildConfig>,
     pub scripts: Option<ScriptsConfig>,
     pub test: Option<TestConfig>,
+    pub workspace: Option<WorkspaceConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Default)]
+pub struct WorkspaceConfig {
+    pub members: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default)]
 pub struct TestConfig {
     pub framework: Option<String>,
     pub source_dir: Option<String>,
+    pub single_binary: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -92,5 +99,6 @@ pub fn create_ephemeral_config(
         dependencies: None,
         scripts: None,
         test: None,
+        workspace: None,
     }
 }

@@ -99,12 +99,15 @@ cx new my-game --template raylib
   - `--profile`: Trace build times (generate chrome tracing `.json`).
 - **`cx watch`**: Rebuild on file save.
 - **`cx clean`**: Remove build artifacts.
+- **`cx package`**: Create a distribution archive (ZIP) containing the executable, DLLs, and assets.
 
 ### Dependencies
 - **`cx add <lib>`**: Add a library from registry or Git URL.
 - **`cx remove <lib>`**: Remove a dependency.
 - **`cx update`**: Update dependencies to latest versions.
 - **`cx vendor`**: Copy all dependencies into `vendor/` for commit/offline use.
+- **`cx lock`**: Manage `cx.lock` file (`--check`, `--update`).
+- **`cx sync`**: Synchronize dependencies with `cx.lock` to ensure reproducible builds.
 - **`cx tree`**: Visualize the dependency graph.
 
 ### Testing & Quality
@@ -114,6 +117,10 @@ cx new my-game --template raylib
 - **`cx check`**: Static analysis (clang-tidy/cppcheck).
 
 ### Ecosystem
+- **`cx toolchain`**: Manage C/C++ compilers.
+  - `list`: Show detected compilers.
+  - `select`: Choose active compiler interactively.
+  - `install <name>`: Download portable toolchains (e.g., `mingw`).
 - **`cx docker`**: Generate a Dockerfile.
 - **`cx ci`**: Generate a GitHub Actions workflow.
 - **`cx setup-ide`**: Generate VSCode configuration (`.vscode/`).

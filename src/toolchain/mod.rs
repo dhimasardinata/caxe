@@ -9,6 +9,8 @@ pub mod types;
 #[cfg(windows)]
 pub mod windows;
 
+pub mod install; // Toolchain installer
+
 pub use types::{CompilerType, Toolchain, ToolchainError};
 
 use std::path::PathBuf;
@@ -76,22 +78,24 @@ pub fn get_or_detect_toolchain(
     let cache_path = get_toolchain_cache_path();
 
     // Try to load from cache first
-    if !force_detect && cache_path.exists()
+    if !force_detect
+        && cache_path.exists()
         && let Ok(contents) = std::fs::read_to_string(&cache_path)
-            && let Ok(cached) = toml::from_str::<Toolchain>(&contents) {
-                // Verify the cached toolchain still exists AND matches preference
-                if cached.cxx_path.exists() {
-                    // If user has a preference, cache must match it
-                    let matches_preference = match &preferred {
-                        None => true, // No preference, any cached toolchain is fine
-                        Some(pref) => *pref == cached.compiler_type,
-                    };
+        && let Ok(cached) = toml::from_str::<Toolchain>(&contents)
+    {
+        // Verify the cached toolchain still exists AND matches preference
+        if cached.cxx_path.exists() {
+            // If user has a preference, cache must match it
+            let matches_preference = match &preferred {
+                None => true, // No preference, any cached toolchain is fine
+                Some(pref) => *pref == cached.compiler_type,
+            };
 
-                    if matches_preference {
-                        return Ok(cached);
-                    }
-                }
+            if matches_preference {
+                return Ok(cached);
             }
+        }
+    }
 
     // Detect fresh toolchain
     let toolchain = detect_toolchain(preferred)?;

@@ -36,11 +36,48 @@ pub struct BuildOptions {
     pub sanitize: Option<String>,
 }
 
-// --- Helper: Check Dependencies (.d file) ---
+// --- Helper: Check Dependencies (.d file or .json for MSVC) ---
 fn check_dependencies(obj_path: &Path, src_path: &Path) -> Result<bool> {
+    // 1. Check for MSVC JSON dependencies first
+    // Actually typically /sourceDependencies foo.json -> foo.json.
+    // We will name it <obj>.json explicitly.
+    let json_path = PathBuf::from(format!("{}.json", obj_path.display()));
+
+    if json_path.exists() {
+        let content = fs::read_to_string(&json_path)?;
+        // Parse JSON: {"Data": {"Source": "...", "Includes": ["..."]}}
+        let json: serde_json::Value = serde_json::from_str(&content)?;
+
+        // Check Includes
+        if let Some(includes) = json.pointer("/Data/Includes")
+            && let Some(arr) = includes.as_array()
+        {
+            let obj_mtime = fs::metadata(obj_path)?.modified()?;
+
+            for include in arr {
+                if let Some(path_str) = include.as_str() {
+                    let dep_path = Path::new(path_str);
+                    if dep_path.exists() {
+                        let dep_mtime = fs::metadata(dep_path)?.modified()?;
+                        if dep_mtime > obj_mtime {
+                            return Ok(true); // Dependency newer
+                        }
+                    }
+                }
+            }
+            // Also check source itself just in case? Usually built-in but good to double check.
+            let src_mtime = fs::metadata(src_path)?.modified()?;
+            if src_mtime > obj_mtime {
+                return Ok(true);
+            }
+            return Ok(false); // All clean
+        }
+    }
+
+    // 2. Check for GCC/Clang .d file
     let d_path = obj_path.with_extension("d");
 
-    // Fallback: If no .d file (e.g. MSVC or first run), check if source is newer than object
+    // Fallback: If no dependency file, check if source is newer than object
     if !d_path.exists() {
         if !obj_path.exists() {
             return Ok(true);
@@ -588,7 +625,10 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 args.push(format!("/Fo{}", obj_path.to_string_lossy()));
                 args.push(format!("/std:{}", config.package.edition));
 
-                // TODO: Recursive Header Tracking for MSVC (/sourceDependencies)
+                // Recursive Header Tracking for MSVC
+                // /sourceDependencies <file> available in VS 2019+
+                args.push("/sourceDependencies".to_string());
+                args.push(format!("{}.json", obj_path.display()));
             } else {
                 // GCC/Clang Flags
                 args.push("-fdiagnostics-color=always".to_string());

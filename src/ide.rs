@@ -24,6 +24,7 @@ pub fn generate_ide_config() -> Result<()> {
         dependencies: None,
         scripts: None,
         test: None,
+        workspace: None,
     });
 
     let bin_name = if let Some(build) = &config.build {
