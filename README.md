@@ -79,6 +79,9 @@ cx new my-server --template web
 
 # Raylib Game Config
 cx new my-game --template raylib
+
+# SDL3 Game (Modern API)
+cx new my-game --template sdl3
 ```
 
 ---

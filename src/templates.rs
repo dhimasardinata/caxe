@@ -243,6 +243,63 @@ void loop() {{
                 name, name
             ),
         ),
+        "sdl3" => (
+            format!(
+                r#"[package]
+name = "{}"
+version = "0.1.0"
+edition = "c++17"
+
+[build]
+libs = ["user32", "gdi32", "shell32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32", "setupapi"]
+flags = ["/MD"]
+
+[dependencies]
+SDL3 = {{ git = "https://github.com/libsdl-org/SDL.git", tag = "release-3.2.4", build = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSDL_TEST=OFF && cmake --build build --config Release", output = "build/Release/SDL3.lib" }}
+"#,
+                name
+            ),
+            r#"#define SDL_MAIN_USE_CALLBACKS 1
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+
+static SDL_Window* window = nullptr;
+static SDL_Renderer* renderer = nullptr;
+
+SDL_AppResult SDL_AppInit(void** appstate, int argc, char* argv[]) {
+    if (!SDL_Init(SDL_INIT_VIDEO)) {
+        SDL_Log("Couldn't initialize SDL: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    if (!SDL_CreateWindowAndRenderer("SDL3 Window (caxe)", 800, 600, 0, &window, &renderer)) {
+        SDL_Log("Couldn't create window/renderer: %s", SDL_GetError());
+        return SDL_APP_FAILURE;
+    }
+
+    return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppEvent(void* appstate, SDL_Event* event) {
+    if (event->type == SDL_EVENT_QUIT) {
+        return SDL_APP_SUCCESS;
+    }
+    return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppIterate(void* appstate) {
+    SDL_SetRenderDrawColor(renderer, 40, 60, 80, 255);
+    SDL_RenderClear(renderer);
+    SDL_RenderPresent(renderer);
+    return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void* appstate, SDL_AppResult result) {
+    // Cleanup handled automatically by SDL
+}
+"#
+            .to_string(),
+        ),
         _ => {
             let dep = if lang == "cpp" {
                 "\n[dependencies]\n# json = \"...\""
