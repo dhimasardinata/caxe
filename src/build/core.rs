@@ -1004,9 +1004,10 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 .extension()
                 .map(|e| e == "lib" || e == "a")
                 .unwrap_or(false)
-                && let Some(parent) = lib_path.parent() {
-                    lib_search_paths.insert(parent.to_path_buf());
-                }
+                && let Some(parent) = lib_path.parent()
+            {
+                lib_search_paths.insert(parent.to_path_buf());
+            }
         }
 
         // For GCC/Clang, add -L flags before the libs
@@ -1272,7 +1273,7 @@ pub fn build_and_run(
         bin_basename
     };
 
-    let bin_path = Path::new("build").join(profile).join(bin_name);
+    let bin_path = Path::new(".cx").join("build").join(profile).join(bin_name);
 
     if !bin_path.exists() {
         anyhow::bail!("Binary not found at {}", bin_path.display());
