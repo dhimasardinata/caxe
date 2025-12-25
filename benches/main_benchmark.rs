@@ -1,7 +1,8 @@
 use caxe::config;
 use caxe::import;
 use caxe::lock::LockFile;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 use toml;
 
 const MOCK_CONFIG: &str = r#"

@@ -1,18 +1,51 @@
-use crate::config::CxConfig;
+use crate::config::{CxConfig, Profile};
 use crate::toolchain::{self, CompilerType, Toolchain, ToolchainError};
 use anyhow::{Context, Result};
 use colored::*;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-// --- Helper: Load Config Once ---
+// --- Helper: Load Config with Profile Parsing ---
 pub fn load_config() -> Result<CxConfig> {
     if !Path::new("cx.toml").exists() {
         return Err(anyhow::anyhow!("cx.toml not found"));
     }
     let config_str = fs::read_to_string("cx.toml")?;
-    toml::from_str(&config_str).context("Failed to parse cx.toml")
+
+    // Parse as raw TOML Value first to extract [profile:*] tables
+    let raw_value: toml::Value = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
+
+    // Extract profiles from [profile:name] tables
+    let mut profiles: HashMap<String, Profile> = HashMap::new();
+    if let toml::Value::Table(root) = &raw_value {
+        for (key, value) in root {
+            if key.starts_with("profile:") {
+                let profile_name = key.strip_prefix("profile:").unwrap().to_string();
+                if let Ok(profile) = value.clone().try_into::<Profile>() {
+                    profiles.insert(profile_name, profile);
+                }
+            }
+        }
+    }
+
+    // Deserialize main config (profiles will be empty from flatten, we fill it manually)
+    let mut config: CxConfig = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
+
+    // Merge extracted profiles into config
+    config.profiles = profiles;
+
+    // Deprecation warning for cflags
+    if let Some(ref build_cfg) = config.build
+        && build_cfg.uses_deprecated_cflags() {
+            eprintln!(
+                "   {} 'cflags' is deprecated, please use 'flags' instead in [build]",
+                "⚠".yellow()
+            );
+        }
+
+    Ok(config)
 }
 
 // --- Helper: Check if a command exists (for fallback only) ---

@@ -34,6 +34,8 @@ pub struct BuildOptions {
     pub wasm: bool,
     pub lto: bool,
     pub sanitize: Option<String>,
+    /// Named profile for cross-compilation (e.g., "esp32", "linux-arm64")
+    pub profile: Option<String>,
 }
 
 // --- Helper: Check Dependencies (.d file or .json for MSVC) ---
@@ -120,6 +122,101 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     let lto = options.lto;
     let sanitize = options.sanitize.clone();
     let start_time = Instant::now();
+
+    // --- Profile Resolution with Inheritance ---
+    // Clone config for potential modification based on selected profile
+    let mut effective_config = config.clone();
+
+    if let Some(profile_name) = &options.profile {
+        // Look up the profile in config.profiles
+        if let Some(profile) = config.profiles.get(profile_name) {
+            println!(
+                "   {} Using profile: {}",
+                "🎯".magenta(),
+                profile_name.cyan().bold()
+            );
+
+            // Resolve base profile first (inheritance)
+            let mut resolved_flags: Vec<String> = Vec::new();
+            let mut resolved_libs: Vec<String> = Vec::new();
+            let mut resolved_compiler: Option<String> = None;
+
+            if let Some(base_name) = &profile.base {
+                // Handle built-in profiles (release/debug) or user-defined profiles
+                if base_name == "release" {
+                    // Release implies optimizations, but we handle that via options.release
+                    // Just note it for verbosity
+                    if verbose {
+                        println!("      {} Inheriting from: {}", "└─".dimmed(), base_name);
+                    }
+                } else if base_name == "debug" {
+                    // Debug is default, nothing special needed
+                    if verbose {
+                        println!("      {} Inheriting from: {}", "└─".dimmed(), base_name);
+                    }
+                } else if let Some(base_profile) = config.profiles.get(base_name) {
+                    // Inherit from another user-defined profile
+                    if verbose {
+                        println!("      {} Inheriting from: {}", "└─".dimmed(), base_name);
+                    }
+                    if let Some(ref flags) = base_profile.flags {
+                        resolved_flags.extend(flags.clone());
+                    }
+                    if let Some(ref libs) = base_profile.libs {
+                        resolved_libs.extend(libs.clone());
+                    }
+                    if let Some(ref compiler) = base_profile.compiler {
+                        resolved_compiler = Some(compiler.clone());
+                    }
+                }
+            }
+
+            // Apply this profile's settings (override base)
+            if let Some(ref flags) = profile.flags {
+                resolved_flags.extend(flags.clone());
+            }
+            if let Some(ref libs) = profile.libs {
+                resolved_libs.extend(libs.clone());
+            }
+            if let Some(ref compiler) = profile.compiler {
+                resolved_compiler = Some(compiler.clone());
+            }
+
+            // Apply resolved values to effective_config
+            let build_cfg = effective_config.build.get_or_insert_with(Default::default);
+
+            // Merge flags into build config
+            if !resolved_flags.is_empty() {
+                let existing = build_cfg.flags.get_or_insert_with(Vec::new);
+                existing.extend(resolved_flags);
+            }
+
+            // Override libs
+            if !resolved_libs.is_empty() {
+                let existing = build_cfg.libs.get_or_insert_with(Vec::new);
+                existing.extend(resolved_libs);
+            }
+
+            // Override compiler
+            if let Some(compiler) = resolved_compiler {
+                build_cfg.compiler = Some(compiler);
+            }
+
+            // Apply bin name override
+            if let Some(ref bin) = profile.bin {
+                build_cfg.bin = Some(bin.clone());
+            }
+        } else {
+            return Err(anyhow::anyhow!(
+                "Profile '{}' not found in cx.toml. Available profiles: {:?}",
+                profile_name,
+                config.profiles.keys().collect::<Vec<_>>()
+            ));
+        }
+    }
+
+    // Use effective_config from now on
+    let config = &effective_config;
     let current_dir = std::env::current_dir()?;
 
     // Dry-run or Verbose header with modern box styling
@@ -863,6 +960,28 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
 
         cmd.args(&object_files);
 
+        // Add include paths for source files in dep_libs (e.g., GLAD's gl.c)
+        // When .c/.cpp files are passed to the linker, MSVC compiles them on the fly
+        // and needs include paths to find headers like <glad/gl.h>
+        let has_source_files = dep_libs.iter().any(|lib| {
+            let lower = lib.to_lowercase();
+            lower.ends_with(".c")
+                || lower.ends_with(".cpp")
+                || lower.ends_with(".cc")
+                || lower.ends_with(".cxx")
+        });
+
+        if has_source_files {
+            for path in &include_paths {
+                if is_msvc || use_clang_cl {
+                    cmd.arg(format!("/I{}", path.display()));
+                } else {
+                    cmd.arg(format!("-I{}", path.display()));
+                }
+            }
+            cmd.args(&extra_cflags);
+        }
+
         if is_msvc || use_clang_cl {
             // Use to_string_lossy and quote the path to handle spaces and special chars
             let output_path = output_bin.to_string_lossy();
@@ -876,6 +995,27 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             cmd.arg(lib);
         }
 
+        // Extract library search paths from dep_libs for user-specified libs
+        // This allows libs = ["glfw3"] to find glfw3.lib in dependency directories
+        let mut lib_search_paths = std::collections::HashSet::new();
+        for lib in &dep_libs {
+            let lib_path = Path::new(lib);
+            if lib_path
+                .extension()
+                .map(|e| e == "lib" || e == "a")
+                .unwrap_or(false)
+                && let Some(parent) = lib_path.parent() {
+                    lib_search_paths.insert(parent.to_path_buf());
+                }
+        }
+
+        // For GCC/Clang, add -L flags before the libs
+        if !is_msvc && !use_clang_cl {
+            for search_path in &lib_search_paths {
+                cmd.arg(format!("-L{}", search_path.display()));
+            }
+        }
+
         if let Some(build_cfg) = &config.build
             && let Some(libs) = &build_cfg.libs
         {
@@ -885,6 +1025,16 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 } else {
                     cmd.arg(format!("-l{}", lib));
                 }
+            }
+        }
+
+        // For MSVC, pass /LIBPATH: flags via /link at the end
+        // Also ensure dynamic CRT (/MD) for compatibility with prebuilt libs like GLFW
+        if (is_msvc || use_clang_cl) && !lib_search_paths.is_empty() {
+            cmd.arg("/MD"); // Use dynamic CRT to match prebuilt dependencies
+            cmd.arg("/link");
+            for search_path in &lib_search_paths {
+                cmd.arg(format!("/LIBPATH:{}", search_path.display()));
             }
         }
 

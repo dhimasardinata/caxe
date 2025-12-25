@@ -26,6 +26,7 @@ pub fn generate_ide_config() -> Result<()> {
         test: None,
         workspace: None,
         arduino: None,
+        profiles: std::collections::HashMap::new(),
     });
 
     let bin_name = if let Some(build) = &config.build {

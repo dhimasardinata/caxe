@@ -109,7 +109,8 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
         build: Some(BuildConfig {
             compiler: Some(compiler),
             bin: Some("app".to_string()),
-            cflags: Some(cflags),
+            flags: Some(cflags),
+            cflags: None,
             libs: None, // Hard to guess libs from source
             sources: None,
             pch: None,
@@ -119,6 +120,7 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
         test: None,
         workspace: None,
         arduino: None,
+        profiles: std::collections::HashMap::new(),
     };
 
     Ok(Some(config))

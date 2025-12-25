@@ -76,6 +76,9 @@ enum Commands {
         /// Build as Arduino project (uses arduino-cli)
         #[arg(long)]
         arduino: bool,
+        /// Use a named profile (e.g., --profile esp32)
+        #[arg(long)]
+        profile: Option<String>,
     },
     /// Compile and run the output binary
     Run {
@@ -158,7 +161,11 @@ enum Commands {
     /// Show system and project setup info
     Info,
     /// Format code using clang-format
-    Fmt,
+    Fmt {
+        /// Check formatting without modifying files (CI mode)
+        #[arg(long)]
+        check: bool,
+    },
     /// Generate documentation using Doxygen
     Doc,
     /// Static analysis using clang-tidy / cppcheck
@@ -329,6 +336,7 @@ fn main() -> Result<()> {
             lto,
             sanitize,
             arduino,
+            profile,
         }) => {
             // Auto-detect Arduino projects: check for .ino files or [arduino] config
             let has_ino_files = std::fs::read_dir(".")
@@ -357,6 +365,7 @@ fn main() -> Result<()> {
                 wasm: *wasm,
                 lto: *lto,
                 sanitize: sanitize.clone(),
+                profile: profile.clone(),
             };
 
             // Workspace Support
@@ -435,7 +444,7 @@ fn main() -> Result<()> {
         }) => deps::add_dependency(lib, tag.clone(), branch.clone(), rev.clone()),
         Some(Commands::Remove { lib }) => deps::remove_dependency(lib),
         Some(Commands::Info) => print_info(),
-        Some(Commands::Fmt) => checker::format_code(),
+        Some(Commands::Fmt { check }) => checker::format_code(*check),
         Some(Commands::Doc) => doc::generate_docs(),
         Some(Commands::Check) => checker::check_code(),
         Some(Commands::Update) => deps::update_dependencies(),

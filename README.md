@@ -31,7 +31,8 @@ It provides a unified workflow for scaffolding, building, testing, formatting, a
 - **🤖 Arduino/IoT**: Auto-detect `.ino` files, build and upload via `arduino-cli`.
 - **🎯 Cross-Platform Targets**: Manage build targets (Windows, Linux, macOS, WebAssembly, ESP32).
 - **🛡️ Safety**: `cx build --sanitize` for Address/Undefined Behavior sanitizers.
-- **🎨 Code Formatting**: Built-in `cx fmt` command (via `clang-format`).
+- **🎨 Code Formatting**: Built-in `cx fmt` command (via `clang-format`) with `--check` for CI.
+- **🎯 Build Profiles**: Custom profiles with inheritance for cross-compilation (`--profile esp32`).
 - **🤖 Automation**: Generators for **Docker**, **GitHub Actions**, and **VSCode** configs.
 
 ## 📦 Installation
@@ -95,6 +96,7 @@ cx new my-game --template raylib
 - **`cx run`**: Build and run the project.
 - **`cx build`**: Compile only.
   - `--release`: Optimize for speed (`-O3` / `/O2`).
+  - `--profile <name>`: Use a named profile (e.g., `--profile esp32`).
   - `--wasm`: Compile to WebAssembly (requires Emscripten).
   - `--lto`: Enable Link Time Optimization.
   - `--sanitize=<check>`: Enable runtime sanitizers (e.g., `address`, `undefined`).
@@ -128,6 +130,7 @@ cx new my-game --template raylib
 - **`cx test`**: Run unit tests in `tests/`.
   - `--filter <name>`: Run specific tests.
 - **`cx fmt`**: Format code with `clang-format`.
+  - `--check`: Verify formatting without modifying (for CI).
 - **`cx check`**: Static analysis (clang-tidy/cppcheck).
 
 ### Ecosystem
@@ -151,7 +154,7 @@ edition = "c++20"
 [build]
 bin = "app" # Output: app.exe
 compiler = "clang"  # Options: msvc, clang, clang-cl, g++
-cflags = ["-O2", "-Wall", "-Wextra"]
+flags = ["-O2", "-Wall", "-Wextra"]
 libs = ["pthread", "m"]
 pch = "src/pch.hpp" # Precompiled Header (Optional)
 
@@ -164,6 +167,12 @@ json = { git = "https://github.com/nlohmann/json.git", tag = "v3.11.2" }
 
 # 3. System Dependency (pkg-config)
 gtk4 = { pkg = "gtk4" }
+
+# Build Profiles (for cross-compilation)
+[profile:esp32]
+base = "release"  # Inherit from release
+compiler = "xtensa-esp32-elf-g++"
+flags = ["-mcpu=esp32", "-ffunction-sections"]
 
 [arduino]
 board = "arduino:avr:uno"  # or "esp32:esp32:esp32"

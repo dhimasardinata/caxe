@@ -26,6 +26,7 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
         wasm: false,
         lto: true, // optimize for size/speed for package
         sanitize: None,
+        profile: None,
     };
 
     if let Err(e) = build::build_project(&config, &build_opts) {
@@ -122,22 +123,24 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
     // Or just skip for MVP.
     // Let's scan the `build_dir` for any OTHER .dll files and include them.
     if cfg!(windows)
-        && let Ok(entries) = std::fs::read_dir(&build_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file()
-                    && let Some(ext) = path.extension()
-                        && ext == "dll" {
-                            let name = path.file_name().unwrap().to_string_lossy();
-                            println!("   {} Adding library: {}", "+".green(), name);
-                            zip.start_file(name, options)?;
-                            let mut f = File::open(&path)?;
-                            let mut buffer = Vec::new();
-                            f.read_to_end(&mut buffer)?;
-                            zip.write_all(&buffer)?;
-                        }
+        && let Ok(entries) = std::fs::read_dir(&build_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file()
+                && let Some(ext) = path.extension()
+                && ext == "dll"
+            {
+                let name = path.file_name().unwrap().to_string_lossy();
+                println!("   {} Adding library: {}", "+".green(), name);
+                zip.start_file(name, options)?;
+                let mut f = File::open(&path)?;
+                let mut buffer = Vec::new();
+                f.read_to_end(&mut buffer)?;
+                zip.write_all(&buffer)?;
             }
         }
+    }
 
     zip.finish()?;
 

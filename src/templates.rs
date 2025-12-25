@@ -9,7 +9,7 @@ edition = "c++17"
 
 [build]
 libs = ["user32", "gdi32", "shell32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32", "setupapi", "dinput8"]
-cflags = ["/DSDL_MAIN_HANDLED"]
+flags = ["/DSDL_MAIN_HANDLED"]
 
 [dependencies]
 SDL2 = {{ git = "https://github.com/libsdl-org/SDL.git", branch = "SDL2", build = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSDL_TEST=OFF && cmake --build build --config Release", output = "build/Release/SDL2.lib, build/Release/SDL2main.lib" }}
@@ -58,10 +58,11 @@ edition = "c++17"
 
 [build]
 libs = ["user32", "gdi32", "shell32", "opengl32", "glfw3"]
+flags = ["/MD"]
 
 [dependencies]
 glfw = {{ git = "https://github.com/glfw/glfw.git", tag = "3.3.9", build = "cmake -S . -B build -DGLFW_BUILD_EXAMPLES=OFF -DGLFW_BUILD_TESTS=OFF -DGLFW_BUILD_DOCS=OFF && cmake --build build --config Release", output = "build/src/Release/glfw3.lib" }}
-glad = {{ git = "https://github.com/Dav1dde/glad.git", tag = "v2.0.8", build = "python -m glad --api gl:core=3.3 --out-path dist c", output = "dist/src/gl.c" }}
+glad = {{ git = "https://github.com/Dav1dde/glad.git", branch = "glad2", build = "pip install --user jinja2 && python -m glad --api gl:core=3.3 --out-path dist c", output = "dist/src/gl.c" }}
 "#,
                 name
             ),
@@ -88,7 +89,7 @@ int main() {
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+    if (!gladLoadGL((GLADloadfunc)glfwGetProcAddress)) {
         std::cerr << "Failed to initialize GLAD" << std::endl;
         return -1;
     }
@@ -184,7 +185,7 @@ version = "0.1.0"
 edition = "c++17"
 
 [build]
-cflags = ["-D_WIN32_WINNT=0x0A00"]
+flags = ["-D_WIN32_WINNT=0x0A00"]
 libs = ["ws2_32"]
 
 [dependencies]
