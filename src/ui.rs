@@ -6,15 +6,6 @@
 //! ## Components
 //!
 //! - `Table` - Auto-sizing table with headers and rows
-//!
-//! ## Example
-//!
-//! ```rust,ignore
-//! use caxe::ui::Table;
-//! let mut table = Table::new(&["Name", "Value"]);
-//! table.add_row(vec!["key".to_string(), "value".to_string()]);
-//! table.print();
-//! ```
 
 use colored::*;
 use std::cmp;
