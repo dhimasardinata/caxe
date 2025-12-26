@@ -1,3 +1,13 @@
+//! File watcher for auto-rebuild.
+//!
+//! This module provides the `cx watch` command for continuous development.
+//! It monitors `src/` and optionally `tests/` for changes and triggers rebuilds.
+//!
+//! ## Modes
+//!
+//! - `cx watch` - Rebuild on file changes
+//! - `cx watch --test` - TDD mode: run tests on every change
+
 use super::core;
 use anyhow::Result;
 use colored::*;

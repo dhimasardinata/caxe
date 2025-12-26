@@ -1,3 +1,17 @@
+//! Dependency tree visualization.
+//!
+//! This module provides the `cx tree` command which displays the project's
+//! dependency graph in a hierarchical, ASCII tree format.
+//!
+//! ## Example Output
+//!
+//! ```text
+//! my-project v1.0.0
+//! ├── raylib (tag: 5.0)
+//! ├── json (tag: v3.11.2)
+//! └── fmt (git: https://github.com/fmtlib/fmt)
+//! ```
+
 use crate::build::load_config;
 use anyhow::Result;
 use colored::*;
@@ -57,4 +71,78 @@ pub fn print_tree() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::config::Dependency;
+
+    #[test]
+    fn test_dependency_simple_format() {
+        let dep = Dependency::Simple("https://github.com/raylib/raylib.git".to_string());
+        match dep {
+            Dependency::Simple(url) => assert!(url.contains("raylib")),
+            _ => panic!("Expected Simple variant"),
+        }
+    }
+
+    #[test]
+    fn test_dependency_complex_with_tag() {
+        let dep = Dependency::Complex {
+            git: Some("https://github.com/nlohmann/json.git".to_string()),
+            pkg: None,
+            tag: Some("v3.11.2".to_string()),
+            branch: None,
+            rev: None,
+            build: None,
+            output: None,
+        };
+
+        match dep {
+            Dependency::Complex { tag, .. } => {
+                assert_eq!(tag, Some("v3.11.2".to_string()));
+            }
+            _ => panic!("Expected Complex variant"),
+        }
+    }
+
+    #[test]
+    fn test_dependency_complex_with_branch() {
+        let dep = Dependency::Complex {
+            git: Some("https://github.com/libsdl-org/SDL.git".to_string()),
+            pkg: None,
+            tag: None,
+            branch: Some("SDL2".to_string()),
+            rev: None,
+            build: None,
+            output: None,
+        };
+
+        match dep {
+            Dependency::Complex { branch, .. } => {
+                assert_eq!(branch, Some("SDL2".to_string()));
+            }
+            _ => panic!("Expected Complex variant"),
+        }
+    }
+
+    #[test]
+    fn test_dependency_pkg_config() {
+        let dep = Dependency::Complex {
+            git: None,
+            pkg: Some("gtk+-3.0".to_string()),
+            tag: None,
+            branch: None,
+            rev: None,
+            build: None,
+            output: None,
+        };
+
+        match dep {
+            Dependency::Complex { pkg, .. } => {
+                assert_eq!(pkg, Some("gtk+-3.0".to_string()));
+            }
+            _ => panic!("Expected Complex variant"),
+        }
+    }
 }

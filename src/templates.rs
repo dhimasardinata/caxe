@@ -1,3 +1,17 @@
+//! Project templates for `cx new`.
+//!
+//! This module provides starter templates for different project types.
+//!
+//! ## Available Templates
+//!
+//! - `console` - Basic console application (default)
+//! - `sdl2` - SDL2 window application
+//! - `sdl3` - SDL3 modern API application
+//! - `opengl` - OpenGL with GLFW and GLAD
+//! - `raylib` - Raylib game framework
+//! - `web` - HTTP server (cpp-httplib or mongoose)
+//! - `arduino` - Arduino/IoT sketch
+
 pub fn get_template(name: &str, lang: &str, template: &str) -> (String, String) {
     match template {
         "sdl2" => (
@@ -9,7 +23,8 @@ edition = "c++17"
 
 [build]
 libs = ["user32", "gdi32", "shell32", "winmm", "imm32", "ole32", "oleaut32", "version", "uuid", "advapi32", "setupapi", "dinput8"]
-flags = ["/DSDL_MAIN_HANDLED"]
+flags = ["/Dmain=SDL_main"]
+subsystem = "windows"
 
 [dependencies]
 SDL2 = {{ git = "https://github.com/libsdl-org/SDL.git", branch = "SDL2", build = "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSDL_TEST=OFF && cmake --build build --config Release", output = "build/Release/SDL2.lib, build/Release/SDL2main.lib" }}
@@ -325,5 +340,79 @@ edition = "{}"
             };
             (cfg, code.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_cpp_template() {
+        let (config, code) = get_template("myapp", "cpp", "console");
+        assert!(config.contains("name = \"myapp\""));
+        assert!(config.contains("c++23"));
+        assert!(code.contains("#include <iostream>"));
+    }
+
+    #[test]
+    fn test_default_c_template() {
+        let (config, code) = get_template("myapp", "c", "console");
+        assert!(config.contains("name = \"myapp\""));
+        assert!(config.contains("c23"));
+        assert!(code.contains("#include <stdio.h>"));
+    }
+
+    #[test]
+    fn test_sdl2_template() {
+        let (config, code) = get_template("game", "cpp", "sdl2");
+        assert!(config.contains("[dependencies]"));
+        assert!(config.contains("SDL2"));
+        assert!(code.contains("SDL_Init"));
+    }
+
+    #[test]
+    fn test_sdl3_template() {
+        let (config, code) = get_template("game", "cpp", "sdl3");
+        assert!(config.contains("SDL3"));
+        assert!(code.contains("SDL_AppInit"));
+    }
+
+    #[test]
+    fn test_opengl_template() {
+        let (config, code) = get_template("render", "cpp", "opengl");
+        assert!(config.contains("glfw"));
+        assert!(config.contains("glad"));
+        assert!(code.contains("gladLoadGL"));
+    }
+
+    #[test]
+    fn test_raylib_template() {
+        let (config, code) = get_template("game", "cpp", "raylib");
+        assert!(config.contains("raylib"));
+        assert!(code.contains("InitWindow"));
+    }
+
+    #[test]
+    fn test_arduino_template() {
+        let (config, code) = get_template("blink", "cpp", "arduino");
+        assert!(config.contains("[arduino]"));
+        assert!(config.contains("arduino:avr:uno"));
+        assert!(code.contains("void setup()"));
+        assert!(code.contains("void loop()"));
+    }
+
+    #[test]
+    fn test_web_cpp_template() {
+        let (config, code) = get_template("server", "cpp", "web");
+        assert!(config.contains("httplib"));
+        assert!(code.contains("httplib::Server"));
+    }
+
+    #[test]
+    fn test_web_c_template() {
+        let (config, code) = get_template("server", "c", "web");
+        assert!(config.contains("mongoose"));
+        assert!(code.contains("mg_http_listen"));
     }
 }

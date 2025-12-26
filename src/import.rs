@@ -1,3 +1,14 @@
+//! Project import and initialization.
+//!
+//! This module scans existing C/C++ projects and generates a `cx.toml` config
+//! file based on detected source files, includes, and build settings.
+//!
+//! ## Usage
+//!
+//! ```bash
+//! cx init  # Scan current directory and create cx.toml
+//! ```
+
 use crate::config::{BuildConfig, CxConfig, PackageConfig};
 use anyhow::Result;
 use colored::*;
@@ -112,8 +123,10 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
             flags: Some(cflags),
             cflags: None,
             libs: None, // Hard to guess libs from source
+            ldflags: None,
             sources: None,
             pch: None,
+            subsystem: None,
         }),
         dependencies: None, // Hard to guess deps
         scripts: None,

@@ -1,3 +1,14 @@
+//! Project packaging and distribution.
+//!
+//! This module provides the `cx package` command which builds and packages
+//! a project into a distributable ZIP archive.
+//!
+//! ## Features
+//!
+//! - Builds the project in release mode with LTO
+//! - Collects binaries, assets, and documentation
+//! - Creates a versioned ZIP archive
+
 use crate::build;
 use anyhow::Result;
 use colored::*;
@@ -131,7 +142,7 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
                 && let Some(ext) = path.extension()
                 && ext == "dll"
             {
-                let name = path.file_name().unwrap().to_string_lossy();
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
                 println!("   {} Adding library: {}", "+".green(), name);
                 zip.start_file(name, options)?;
                 let mut f = File::open(&path)?;

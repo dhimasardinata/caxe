@@ -1,3 +1,18 @@
+//! # caxe CLI Entry Point
+//!
+//! This is the main executable for the `cx` command-line tool.
+//! It parses CLI arguments using clap and routes commands to the appropriate handlers.
+//!
+//! ## Command Structure
+//!
+//! Commands are organized into categories:
+//! - **Project**: `new`, `init`, `info`, `stats`
+//! - **Build**: `build`, `run`, `clean`, `watch`, `test`
+//! - **Dependencies**: `add`, `remove`, `update`, `vendor`, `tree`
+//! - **Quality**: `fmt`, `check`, `doc`
+//! - **Toolchain**: `toolchain`, `target`, `doctor`
+//! - **Ecosystem**: `ci`, `docker`, `setup-ide`, `generate`
+
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
@@ -10,12 +25,12 @@ use caxe::build;
 use caxe::cache;
 use caxe::checker;
 use caxe::ci;
+use caxe::commands;
 use caxe::deps;
 use caxe::doc;
 use caxe::docker;
 use caxe::ide;
 use caxe::import;
-use caxe::lock;
 use caxe::package;
 use caxe::registry;
 use caxe::stats;
@@ -314,12 +329,12 @@ fn main() -> Result<()> {
         }
 
         Some(Commands::Lock { update, check }) => {
-            handle_lock(*update, *check);
+            commands::doctor::handle_lock(*update, *check);
             Ok(())
         }
 
         Some(Commands::Sync) => {
-            handle_sync();
+            commands::doctor::handle_sync();
             Ok(())
         }
 
@@ -461,16 +476,48 @@ fn main() -> Result<()> {
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
             Ok(())
         }
-        Some(Commands::Toolchain { op }) => handle_toolchain_command(op),
-        Some(Commands::Doctor) => run_doctor(),
+        Some(Commands::Toolchain { op }) => {
+            let local_op = op.as_ref().map(|o| match o {
+                ToolchainOp::List => commands::toolchain::ToolchainOp::List,
+                ToolchainOp::Select => commands::toolchain::ToolchainOp::Select,
+                ToolchainOp::Clear => commands::toolchain::ToolchainOp::Clear,
+                ToolchainOp::Install { name } => {
+                    commands::toolchain::ToolchainOp::Install { name: name.clone() }
+                }
+                ToolchainOp::Update => commands::toolchain::ToolchainOp::Update,
+            });
+            commands::toolchain::handle_toolchain_command(&local_op)
+        }
+        Some(Commands::Doctor) => commands::doctor::run_doctor(),
         Some(Commands::Vendor) => deps::vendor_dependencies(),
         Some(Commands::CI) => ci::generate_ci_config(),
         Some(Commands::Docker) => docker::generate_docker_config(),
         Some(Commands::SetupIde) => ide::generate_ide_config(),
         Some(Commands::Tree) => tree::print_tree(),
         Some(Commands::Stats) => stats::print_stats(),
-        Some(Commands::Target { op }) => handle_target_command(op),
-        Some(Commands::Generate { format }) => handle_generate_command(format),
+        Some(Commands::Target { op }) => {
+            let local_op = op.as_ref().map(|o| match o {
+                TargetOp::List => commands::target::TargetOp::List,
+                TargetOp::Add { name } => commands::target::TargetOp::Add { name: name.clone() },
+                TargetOp::Remove { name } => {
+                    commands::target::TargetOp::Remove { name: name.clone() }
+                }
+                TargetOp::Default { name } => {
+                    commands::target::TargetOp::Default { name: name.clone() }
+                }
+            });
+            commands::target::handle_target_command(&local_op)
+        }
+        Some(Commands::Generate { format }) => {
+            let local_format = match format {
+                GenerateFormat::Cmake => commands::generate::GenerateFormat::Cmake,
+                GenerateFormat::Ninja => commands::generate::GenerateFormat::Ninja,
+                GenerateFormat::CompileCommands => {
+                    commands::generate::GenerateFormat::CompileCommands
+                }
+            };
+            commands::generate::handle_generate_command(&local_format)
+        }
         Some(Commands::Upload { port, verbose }) => {
             build::arduino::upload_arduino(port.clone(), *verbose)
         }
@@ -667,7 +714,9 @@ fn create_project(name_opt: &Option<String>, lang_cli: &str, templ_cli: &str) ->
     };
 
     let template = if name_opt.is_none() {
-        let options = vec!["console", "arduino", "web", "raylib", "sdl2", "opengl"];
+        let options = vec![
+            "console", "arduino", "web", "raylib", "sdl2", "sdl3", "opengl",
+        ];
         Select::new("Select a template:", options).prompt()?
     } else {
         templ_cli
@@ -943,677 +992,4 @@ fn print_info() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn handle_toolchain_command(_op: &Option<ToolchainOp>) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use toolchain::windows::discover_all_toolchains;
-
-        match _op {
-            Some(ToolchainOp::List) => {
-                let toolchains = discover_all_toolchains();
-                if toolchains.is_empty() {
-                    println!("{} No toolchains found.", "x".red());
-                } else {
-                    // Try to detect active toolchain to highlight it
-                    let config = crate::build::load_config().ok();
-                    let preferred_type = config
-                        .as_ref()
-                        .and_then(|c| c.build.as_ref())
-                        .and_then(|b| b.compiler.as_ref())
-                        .map(|s| match s.as_str() {
-                            "clang-cl" => toolchain::CompilerType::ClangCL,
-                            "clang" => toolchain::CompilerType::Clang,
-                            "g++" | "gcc" => toolchain::CompilerType::GCC,
-                            _ => toolchain::CompilerType::MSVC,
-                        });
-
-                    let active = toolchain::get_or_detect_toolchain(preferred_type, false).ok();
-
-                    println!("{} Available Toolchains:", "Available Toolchains:".bold());
-                    let mut table = crate::ui::Table::new(&["Id", "Name", "Version", "Source"]);
-
-                    for (i, tc) in toolchains.iter().enumerate() {
-                        let is_in_use = if let Some(a) = &active {
-                            tc.path == a.cc_path || tc.path == a.cxx_path
-                        } else {
-                            false
-                        };
-
-                        let short_ver = if tc.version.len() > 40 {
-                            format!("{}...", &tc.version[..40])
-                        } else {
-                            tc.version.clone()
-                        };
-
-                        let mut row = vec![
-                            format!("{}", i + 1),
-                            tc.display_name.clone(),
-                            short_ver,
-                            tc.source.to_string(),
-                        ];
-
-                        if is_in_use {
-                            row = row
-                                .into_iter()
-                                .map(|s| s.green().bold().to_string())
-                                .collect();
-                        } else {
-                            row[0] = row[0].dimmed().to_string();
-                            row[1] = row[1].cyan().to_string();
-                            row[2] = row[2].dimmed().to_string();
-                            row[3] = row[3].yellow().to_string();
-                        }
-
-                        table.add_row(row);
-                    }
-                    table.print();
-                }
-            }
-
-            None | Some(ToolchainOp::Select) => {
-                // Interactive selection (default behavior)
-                let toolchains = discover_all_toolchains();
-                if toolchains.is_empty() {
-                    println!("{} No toolchains found!", "x".red());
-                    println!("  Install Visual Studio Build Tools or LLVM to get started.");
-                    return Ok(());
-                }
-
-                // Format options for display
-                let options: Vec<String> = toolchains.iter().map(|tc| tc.to_string()).collect();
-
-                let selection = Select::new("Select a toolchain:", options).prompt()?;
-
-                // Find the selected toolchain
-                let selected = toolchains.iter().find(|tc| tc.to_string() == selection);
-
-                if let Some(tc) = selected {
-                    // Cache the selection
-                    let cache_path = dirs::home_dir()
-                        .unwrap_or_else(|| PathBuf::from("."))
-                        .join(".cx")
-                        .join("toolchain-selection.toml");
-
-                    let content = format!(
-                        "# User-selected toolchain\ncompiler_type = {:?}\npath = {:?}\nversion = {:?}\nsource = {:?}\n",
-                        format!("{:?}", tc.compiler_type),
-                        tc.path.display(),
-                        tc.version,
-                        tc.source
-                    );
-
-                    if let Err(e) = std::fs::create_dir_all(cache_path.parent().unwrap()) {
-                        println!("{} Failed to create cache dir: {}", "x".red(), e);
-                    } else if let Err(e) = std::fs::write(&cache_path, content) {
-                        println!("{} Failed to save selection: {}", "x".red(), e);
-                    } else {
-                        println!();
-                        println!(
-                            "{} Selected: {} ({})",
-                            "✓".green(),
-                            tc.display_name.cyan(),
-                            tc.source.yellow()
-                        );
-                        println!("  Saved to: {}", cache_path.display().to_string().dimmed());
-                    }
-
-                    // Also update cx.toml if we're in a project
-                    if Path::new("cx.toml").exists() {
-                        let compiler_str = match tc.compiler_type {
-                            toolchain::CompilerType::MSVC => "msvc",
-                            toolchain::CompilerType::ClangCL => "clang-cl",
-                            toolchain::CompilerType::Clang => "clang",
-                            toolchain::CompilerType::GCC => "g++",
-                        };
-
-                        // Read current cx.toml
-                        if let Ok(toml_content) = std::fs::read_to_string("cx.toml") {
-                            let new_content = if toml_content.contains("[build]") {
-                                // Update existing [build] section
-                                if toml_content.contains("compiler =") {
-                                    // Replace existing compiler line
-                                    let mut result = String::new();
-                                    for line in toml_content.lines() {
-                                        if line.trim().starts_with("compiler =") {
-                                            result.push_str(&format!(
-                                                "compiler = \"{}\"",
-                                                compiler_str
-                                            ));
-                                        } else {
-                                            result.push_str(line);
-                                        }
-                                        result.push('\n');
-                                    }
-                                    result
-                                } else {
-                                    // Add compiler to existing [build] section
-                                    toml_content.replace(
-                                        "[build]",
-                                        &format!("[build]\ncompiler = \"{}\"", compiler_str),
-                                    )
-                                }
-                            } else {
-                                // Add new [build] section
-                                format!(
-                                    "{}\n[build]\ncompiler = \"{}\"\n",
-                                    toml_content.trim_end(),
-                                    compiler_str
-                                )
-                            };
-
-                            if let Err(e) = std::fs::write("cx.toml", new_content) {
-                                println!("{} Failed to update cx.toml: {}", "x".red(), e);
-                            } else {
-                                println!(
-                                    "  {} Updated cx.toml with compiler = \"{}\"",
-                                    "✓".green(),
-                                    compiler_str.cyan()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            Some(ToolchainOp::Clear) => {
-                // Clear cached selection
-                let cache_path = dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("."))
-                    .join(".cx")
-                    .join("toolchain-selection.toml");
-
-                if cache_path.exists() {
-                    if let Err(e) = std::fs::remove_file(&cache_path) {
-                        println!("{} Failed to clear selection: {}", "x".red(), e);
-                    } else {
-                        println!("{} Cleared toolchain selection", "✓".green());
-                    }
-                } else {
-                    println!("{} No selection cached.", "!".yellow());
-                }
-            }
-
-            Some(ToolchainOp::Install { name }) => {
-                toolchain::install::install_toolchain(name.clone())?;
-            }
-
-            Some(ToolchainOp::Update) => {
-                toolchain::install::update_toolchains()?;
-            }
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        println!(
-            "{} Toolchain management is currently Windows-only.",
-            "!".yellow()
-        );
-    }
-
-    Ok(())
-}
-
-/// Handle the `cx target` command for cross-compilation targets
-fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
-    let config_path = Path::new("cx.toml");
-
-    match op {
-        None | Some(TargetOp::List) => {
-            println!(
-                "{} {}",
-                "🎯".cyan(),
-                "Available Cross-Compilation Targets".bold()
-            );
-            println!("{}", "─".repeat(50).dimmed());
-            println!();
-            println!(
-                "   {} (MSVC) - Windows 64-bit",
-                "windows-x64".green().bold()
-            );
-            println!(
-                "   {} (MinGW) - Windows 64-bit GNU",
-                "windows-x64-gnu".green()
-            );
-            println!("   {} (GCC/Clang) - Linux 64-bit", "linux-x64".blue());
-            println!("   {} (Cross) - Linux ARM64", "linux-arm64".blue());
-            println!("   {} (Clang) - macOS Intel", "macos-x64".magenta());
-            println!(
-                "   {} (Clang) - macOS Apple Silicon",
-                "macos-arm64".magenta()
-            );
-            println!("   {} (Emscripten) - WebAssembly", "wasm32".yellow());
-            println!("   {} (ESP-IDF) - ESP32 Microcontroller", "esp32".red());
-            println!();
-
-            // Show configured targets if in a project
-            if config_path.exists()
-                && let Ok(content) = std::fs::read_to_string(config_path)
-            {
-                if content.contains("[targets]") || content.contains("targets =") {
-                    println!("{} Project targets configured", "✓".green());
-                } else {
-                    println!(
-                        "{} No targets configured. Use {} to add one.",
-                        "!".yellow(),
-                        "cx target add <name>".cyan()
-                    );
-                }
-            }
-            println!();
-            println!(
-                "Usage: {} or {}",
-                "cx target add <name>".cyan(),
-                "cx build --target <name>".cyan()
-            );
-        }
-        Some(TargetOp::Add { name }) => {
-            if !config_path.exists() {
-                println!(
-                    "{} No cx.toml found. Run {} first.",
-                    "x".red(),
-                    "cx init".cyan()
-                );
-                return Ok(());
-            }
-
-            let valid_targets = [
-                "windows-x64",
-                "windows-x64-gnu",
-                "linux-x64",
-                "linux-arm64",
-                "macos-x64",
-                "macos-arm64",
-                "wasm32",
-                "esp32",
-            ];
-
-            if !valid_targets.contains(&name.as_str()) {
-                println!(
-                    "{} Unknown target '{}'. Run {} to see available targets.",
-                    "x".red(),
-                    name,
-                    "cx target list".cyan()
-                );
-                return Ok(());
-            }
-
-            // Read and update config
-            let mut content = std::fs::read_to_string(config_path)?;
-
-            if content.contains(&format!("\"{}\"", name)) {
-                println!("{} Target '{}' already configured.", "!".yellow(), name);
-                return Ok(());
-            }
-
-            // Add targets section if not present
-            if !content.contains("[targets]") {
-                content.push_str(&format!("\n[targets]\nlist = [\"{}\"]\n", name));
-            } else {
-                // Append to existing targets list
-                content = content.replace("list = [", &format!("list = [\"{}\", ", name));
-            }
-
-            std::fs::write(config_path, content)?;
-            println!("{} Added target: {}", "✓".green(), name.cyan());
-            println!(
-                "   Build with: {}",
-                format!("cx build --target {}", name).yellow()
-            );
-        }
-        Some(TargetOp::Remove { name }) => {
-            if !config_path.exists() {
-                println!("{} No cx.toml found.", "x".red());
-                return Ok(());
-            }
-
-            let content = std::fs::read_to_string(config_path)?;
-            let new_content = content
-                .replace(&format!("\"{}\", ", name), "")
-                .replace(&format!(", \"{}\"", name), "")
-                .replace(&format!("\"{}\"", name), "");
-
-            std::fs::write(config_path, new_content)?;
-            println!("{} Removed target: {}", "✓".green(), name);
-        }
-        Some(TargetOp::Default { name }) => {
-            if !config_path.exists() {
-                println!("{} No cx.toml found.", "x".red());
-                return Ok(());
-            }
-
-            let mut content = std::fs::read_to_string(config_path)?;
-
-            // Add or update default_target
-            if content.contains("default_target") {
-                // Replace existing
-                let re = regex::Regex::new(r#"default_target\s*=\s*"[^"]*""#).unwrap();
-                content = re
-                    .replace(&content, &format!("default_target = \"{}\"", name))
-                    .to_string();
-            } else if content.contains("[targets]") {
-                content = content.replace(
-                    "[targets]",
-                    &format!("[targets]\ndefault_target = \"{}\"", name),
-                );
-            } else {
-                content.push_str(&format!("\n[targets]\ndefault_target = \"{}\"\n", name));
-            }
-
-            std::fs::write(config_path, content)?;
-            println!("{} Set default target: {}", "✓".green(), name.cyan());
-        }
-    }
-    Ok(())
-}
-
-/// Handle the `cx generate` command for build system file generation
-fn handle_generate_command(format: &GenerateFormat) -> Result<()> {
-    let config = build::load_config()?;
-
-    match format {
-        GenerateFormat::Cmake => {
-            generate_cmake(&config)?;
-        }
-        GenerateFormat::Ninja => {
-            generate_ninja(&config)?;
-        }
-        GenerateFormat::CompileCommands => {
-            println!(
-                "{} compile_commands.json is generated automatically when building.",
-                "!".yellow()
-            );
-            println!("   Location: {}", ".cx/build/compile_commands.json".cyan());
-            println!("   Run {} to generate it.", "cx build".cyan());
-        }
-    }
-    Ok(())
-}
-
-fn generate_cmake(config: &caxe::config::CxConfig) -> Result<()> {
-    println!("{} Generating CMakeLists.txt...", "📝".cyan());
-
-    let name = &config.package.name;
-    let edition = &config.package.edition;
-
-    // Convert edition to CMake standard
-    let cpp_standard = edition.replace("c++", "").replace("c", "");
-
-    let mut cmake = format!(
-        r#"cmake_minimum_required(VERSION 3.16)
-project({name} LANGUAGES CXX)
-
-set(CMAKE_CXX_STANDARD {cpp_standard})
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Source files
-file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
-
-# Executable
-add_executable(${{PROJECT_NAME}} ${{SOURCES}})
-
-# Include directories
-target_include_directories(${{PROJECT_NAME}} PRIVATE src)
-"#
-    );
-
-    // Add dependencies if present
-    if let Some(deps) = &config.dependencies {
-        cmake.push_str("\n# Dependencies\n");
-        for dep_name in deps.keys() {
-            cmake.push_str(&format!("# find_package({} REQUIRED)\n", dep_name));
-        }
-    }
-
-    // Add libs if present
-    if let Some(build) = &config.build
-        && let Some(libs) = &build.libs
-    {
-        cmake.push_str("\n# Libraries\ntarget_link_libraries(${PROJECT_NAME} PRIVATE");
-        for lib in libs {
-            cmake.push_str(&format!(" {}", lib));
-        }
-        cmake.push_str(")\n");
-    }
-
-    std::fs::write("CMakeLists.txt", cmake)?;
-    println!("{} Created CMakeLists.txt", "✓".green());
-    println!();
-    println!("Usage:");
-    println!(
-        "   {} && {}",
-        "cmake -B build -S .".yellow(),
-        "cmake --build build".yellow()
-    );
-
-    Ok(())
-}
-
-fn generate_ninja(config: &caxe::config::CxConfig) -> Result<()> {
-    println!("{} Generating build.ninja...", "📝".cyan());
-
-    let name = &config.package.name;
-    let edition = &config.package.edition;
-
-    // Detect compiler
-    let compiler = if cfg!(windows) { "cl" } else { "g++" };
-    let is_msvc = compiler == "cl";
-
-    let std_flag = if is_msvc {
-        build::utils::get_std_flag_msvc(edition)
-    } else {
-        build::utils::get_std_flag_gcc(edition)
-    };
-
-    let mut ninja = String::from("# Auto-generated by caxe\n\n");
-
-    if is_msvc {
-        ninja.push_str(&format!(
-            r#"
-cxx = cl
-cxxflags = /nologo /EHsc {std_flag} /c
-linkflags = /nologo
-
-rule compile
-  command = $cxx $cxxflags $in /Fo$out
-  description = Compiling $in
-
-rule link
-  command = $cxx $linkflags $in /Fe$out
-  description = Linking $out
-
-"#
-        ));
-    } else {
-        ninja.push_str(&format!(
-            r#"
-cxx = g++
-cxxflags = {std_flag} -c
-linkflags = 
-
-rule compile
-  command = $cxx $cxxflags $in -o $out
-  description = Compiling $in
-
-rule link
-  command = $cxx $linkflags $in -o $out
-  description = Linking $out
-
-"#
-        ));
-    }
-
-    // Find source files
-    let src_dir = Path::new("src");
-    let mut obj_files = Vec::new();
-
-    if src_dir.exists() {
-        for entry in walkdir::WalkDir::new(src_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-        {
-            let path = entry.path();
-            if path
-                .extension()
-                .is_some_and(|e| ["cpp", "cc", "cxx", "c"].contains(&e.to_str().unwrap()))
-            {
-                let obj_name = path.file_stem().unwrap().to_string_lossy();
-                let obj_ext = if is_msvc { "obj" } else { "o" };
-                let obj_path = format!("build/{}.{}", obj_name, obj_ext);
-
-                ninja.push_str(&format!("build {}: compile {}\n", obj_path, path.display()));
-                obj_files.push(obj_path);
-            }
-        }
-    }
-
-    // Link
-    let exe_ext = if cfg!(windows) { ".exe" } else { "" };
-    ninja.push_str(&format!(
-        "\nbuild build/{}{}: link {}\n",
-        name,
-        exe_ext,
-        obj_files.join(" ")
-    ));
-    ninja.push_str(&format!("\ndefault build/{}{}\n", name, exe_ext));
-
-    std::fs::write("build.ninja", ninja)?;
-    println!("{} Created build.ninja", "✓".green());
-    println!();
-    println!("Usage: {}", "ninja".yellow());
-
-    Ok(())
-}
-
-fn run_doctor() -> Result<()> {
-    println!("{} Running System Doctor...", "🚑".red());
-    println!("-------------------------------");
-
-    print!("Checking OS... ");
-    println!(
-        "{} ({})",
-        std::env::consts::OS.green(),
-        std::env::consts::ARCH.cyan()
-    );
-
-    #[cfg(windows)]
-    {
-        print!("Checking MSVC... ");
-        let toolchains = toolchain::windows::discover_all_toolchains();
-        if !toolchains.is_empty() {
-            println!("{}", "Found".green());
-            for tc in toolchains {
-                println!("  - {} ({})", tc.display_name, tc.version);
-            }
-        } else {
-            println!("{}", "Not Found (Install Visual Studio Build Tools)".red());
-        }
-    }
-
-    print!("Checking Git... ");
-    if std::process::Command::new("git")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        println!("{}", "Found".green());
-    } else {
-        println!("{}", "Not Found (Install Git)".red());
-    }
-
-    // Check CMake
-    print!("Checking CMake... ");
-    if std::process::Command::new("cmake")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        println!("{}", "Found".green());
-    } else {
-        println!("{}", "Not Found (Optional)".yellow());
-    }
-
-    Ok(())
-}
-
-fn handle_lock(update: bool, check: bool) {
-    if check {
-        println!("{} Verifying lockfile...", "🔒".blue());
-        match lock::LockFile::load() {
-            Ok(lockfile) => match build::load_config() {
-                Ok(config) => {
-                    let mut success = true;
-                    if let Some(deps) = config.dependencies {
-                        for (name, _) in deps {
-                            if lockfile.get(&name).is_none() {
-                                println!(
-                                    "{} Dependency '{}' missing from cx.lock",
-                                    "x".red(),
-                                    name
-                                );
-                                success = false;
-                            }
-                        }
-                    }
-                    if success {
-                        println!("{} Lockfile is in sync.", "✓".green());
-                    } else {
-                        println!(
-                            "{} Lockfile out of sync. Run 'cx lock --update'.",
-                            "x".red()
-                        );
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error loading config: {}", e);
-                    std::process::exit(1);
-                }
-            },
-            Err(e) => {
-                eprintln!("Error loading lockfile: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else if update {
-        println!("{} Updating lockfile...", "🔄".blue());
-        if let Err(e) = deps::update_dependencies() {
-            eprintln!("Error updating dependencies: {}", e);
-            std::process::exit(1);
-        }
-    } else {
-        println!("Use --check to verify or --update to update/regenerate.");
-    }
-}
-
-fn handle_sync() {
-    println!(
-        "{} Synchronizing dependencies with lockfile...",
-        "📦".blue()
-    );
-    // 1. Load Config to check if we even have deps
-    match build::load_config() {
-        Ok(config) => {
-            if let Some(deps) = config.dependencies {
-                // 2. Fetch/Sync
-                // fetch_dependencies handles reading cx.lock and checking out specific revisions
-                match deps::fetch_dependencies(&deps) {
-                    Ok(_) => println!("{} Dependencies synchronized.", "✓".green()),
-                    Err(e) => {
-                        eprintln!("Error synchronizing: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                println!("No dependencies found in cx.toml.");
-            }
-        }
-        Err(e) => {
-            eprintln!("Error loading config: {}", e);
-            std::process::exit(1);
-        }
-    }
 }

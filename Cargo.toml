@@ -1,10 +1,10 @@
 [package]
 name = "caxe"
-version = "0.3.7"
+version = "0.3.8"
 edition = "2024"
 description = "A modern C/C++ project manager that cuts through build system complexity. Zero config, smart dependencies, and parallel builds."
 authors = ["Dhimas Ardinata dhimasardinatapp@gmail.com"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/dhimasardinata/caxe"
 readme = "README.md"
 keywords = ["cpp", "build-tool", "package-manager", "c", "make"]
@@ -34,6 +34,7 @@ toml = "0.9.10"
 ureq = { version = "3.1", features = ["json"] }
 walkdir = "2.5.0"
 regex = "1.10"
+sha2 = "0.10"
 zip = "7.0.0"
 
 [target.'cfg(windows)'.dependencies]

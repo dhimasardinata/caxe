@@ -1,3 +1,13 @@
+//! Dependency management commands.
+//!
+//! This module provides functions for adding, removing, and updating dependencies.
+//!
+//! ## Commands
+//!
+//! - `cx add <lib>` - Add a dependency
+//! - `cx remove <lib>` - Remove a dependency
+//! - `cx update` - Update all dependencies to latest
+
 use crate::config::Dependency;
 use anyhow::{Context, Result};
 use colored::*;

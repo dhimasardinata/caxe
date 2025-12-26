@@ -1,3 +1,14 @@
+//! Code quality tools: formatting and static analysis.
+//!
+//! This module provides the `cx fmt` and `cx check` commands for maintaining
+//! code quality in C/C++ projects.
+//!
+//! ## Commands
+//!
+//! - `cx fmt` - Format code using clang-format
+//! - `cx fmt --check` - Check formatting without modifying files
+//! - `cx check` - Run static analysis using clang-tidy
+
 use crate::build::load_config;
 use crate::deps;
 use anyhow::Result;
@@ -88,9 +99,12 @@ SpacesBeforeTrailingComments: 2
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
+            .template(
+                "{spinner:.yellow} [{elapsed_precise}] [{bar:40.yellow/black}] {pos}/{len} {msg}",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .tick_chars("◐◓◑◒")
+            .progress_chars("▰▱ "),
     );
 
     let mut formatted_count = 0;
@@ -114,9 +128,10 @@ SpacesBeforeTrailingComments: 2
                 .output();
 
             if let Ok(out) = output
-                && (!out.status.success() || !out.stderr.is_empty()) {
-                    unformatted_files.push(path.display().to_string());
-                }
+                && (!out.status.success() || !out.stderr.is_empty())
+            {
+                unformatted_files.push(path.display().to_string());
+            }
         } else {
             // Format mode: apply formatting in-place
             let status = Command::new("clang-format")
@@ -205,9 +220,12 @@ pub fn check_code() -> Result<()> {
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
+            .template(
+                "{spinner:.yellow} [{elapsed_precise}] [{bar:40.yellow/black}] {pos}/{len} {msg}",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .tick_chars("◐◓◑◒")
+            .progress_chars("▰▱ "),
     );
 
     let warnings: usize = files

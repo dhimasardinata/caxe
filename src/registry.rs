@@ -67,14 +67,13 @@ impl Registry {
         // 1. Check Cache Validity
         if let Ok(metadata) = fs::metadata(&cache_path)
             && let Ok(modified) = metadata.modified()
-                && let Ok(age) = SystemTime::now().duration_since(modified)
-                    && age < Duration::from_secs(CACHE_TTL_SECS)
-                        && let Ok(content) = fs::read_to_string(&cache_path)
-                            && let Ok(reg) =
-                                serde_json::from_str::<HashMap<String, RegistryEntry>>(&content)
-                            {
-                                return Ok(Self(reg));
-                            }
+            && let Ok(age) = SystemTime::now().duration_since(modified)
+            && age < Duration::from_secs(CACHE_TTL_SECS)
+            && let Ok(content) = fs::read_to_string(&cache_path)
+            && let Ok(reg) = serde_json::from_str::<HashMap<String, RegistryEntry>>(&content)
+        {
+            return Ok(Self(reg));
+        }
 
         // 2. Fetch from Remote
         print!("{} Fetching registry... ", "⚡".yellow());
@@ -108,7 +107,7 @@ impl Registry {
     }
 
     fn get_cache_path() -> Result<PathBuf> {
-        let home = dirs::home_dir().expect("Could not find home directory");
+        let home = dirs::home_dir().context("Could not find home directory")?;
         Ok(home.join(".cx").join(CACHE_FILE))
     }
 }
@@ -134,4 +133,149 @@ pub fn search(query: &str) -> Vec<(String, String)> {
         })
         .map(|(k, entry)| (k.clone(), entry.url.clone()))
         .collect()
+}
+
+/// Add a package to cx.toml
+pub fn add_package(name: &str) -> Result<()> {
+    use std::path::Path;
+
+    // Check if cx.toml exists
+    if !Path::new("cx.toml").exists() {
+        anyhow::bail!("No cx.toml found. Run 'cx init' or 'cx new' first.");
+    }
+
+    // Get package URL from registry
+    let url = resolve_alias(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Package '{}' not found in registry. Try 'cx search {}'",
+            name,
+            name
+        )
+    })?;
+
+    // Read existing cx.toml
+    let content = fs::read_to_string("cx.toml")?;
+
+    // Check if package already exists
+    let name_lower = name.to_lowercase();
+    if content
+        .to_lowercase()
+        .contains(&format!("{} =", name_lower))
+    {
+        println!("   {} {} is already in dependencies", "⚡".yellow(), name);
+        return Ok(());
+    }
+
+    // Build the dependency line
+    let dep_line = format!("{} = \"{}\"", name, url);
+
+    // Check if [dependencies] section exists
+    let new_content = if content.contains("[dependencies]") {
+        // Add after [dependencies] line
+        content.replace("[dependencies]", &format!("[dependencies]\n{}", dep_line))
+    } else {
+        // Add new [dependencies] section at the end
+        format!("{}\n\n[dependencies]\n{}\n", content.trim(), dep_line)
+    };
+
+    fs::write("cx.toml", new_content)?;
+
+    println!("   {} Added {} to dependencies", "✓".green(), name.cyan());
+    println!("   {} {}", "📦".blue(), url);
+
+    Ok(())
+}
+
+/// Remove a package from cx.toml
+pub fn remove_package(name: &str) -> Result<()> {
+    use std::path::Path;
+
+    if !Path::new("cx.toml").exists() {
+        anyhow::bail!("No cx.toml found in current directory");
+    }
+
+    let content = fs::read_to_string("cx.toml")?;
+    let name_lower = name.to_lowercase();
+
+    // Find and remove the line containing the package
+    let mut found = false;
+    let new_lines: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let line_lower = line.to_lowercase().trim_start().to_string();
+            let matches = line_lower.starts_with(&format!("{} =", name_lower))
+                || line_lower.starts_with(&format!("\"{}\"", name_lower));
+            if matches {
+                found = true;
+            }
+            !matches
+        })
+        .collect();
+
+    if !found {
+        println!("   {} {} not found in dependencies", "⚠".yellow(), name);
+        return Ok(());
+    }
+
+    fs::write("cx.toml", new_lines.join("\n"))?;
+
+    println!(
+        "   {} Removed {} from dependencies",
+        "✓".green(),
+        name.cyan()
+    );
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_registry_contains_common_libs() {
+        let registry = Registry::default();
+        assert!(registry.0.contains_key("raylib"));
+        assert!(registry.0.contains_key("json"));
+        assert!(registry.0.contains_key("fmt"));
+    }
+
+    #[test]
+    fn test_registry_entry_has_url() {
+        let registry = Registry::default();
+        let entry = registry.0.get("raylib").unwrap();
+        assert!(entry.url.contains("github.com"));
+        assert!(entry.description.is_some());
+    }
+
+    #[test]
+    fn test_search_finds_by_name() {
+        // This tests the search logic pattern, using default registry
+        let registry = Registry::default();
+        let query = "ray";
+        let results: Vec<_> = registry
+            .0
+            .iter()
+            .filter(|(k, _)| k.to_lowercase().contains(&query.to_lowercase()))
+            .collect();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_search_finds_by_description() {
+        let registry = Registry::default();
+        let query = "json";
+        let results: Vec<_> = registry
+            .0
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .description
+                    .as_ref()
+                    .map(|d| d.to_lowercase().contains(&query.to_lowercase()))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert!(!results.is_empty());
+    }
 }

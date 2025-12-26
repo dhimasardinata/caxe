@@ -1,3 +1,14 @@
+//! Portable toolchain installation.
+//!
+//! This module provides the `cx toolchain install` command for downloading
+//! and installing portable C++ compilers.
+//!
+//! ## Supported Toolchains
+//!
+//! - GCC (MinGW-w64) - Portable GCC for Windows
+//! - Clang/LLVM - Portable LLVM toolchain
+//! - Arduino CLI - For embedded development
+
 use anyhow::{Context, Result};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -474,9 +485,10 @@ fn download_file(url: &str, path: &Path) -> Result<()> {
 
     let pb = ProgressBar::new(total_size);
     pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .progress_chars("#>-"));
+        .template("{spinner:.blue} [{elapsed_precise}] [{bar:40.green/black}] {bytes}/{total_bytes} ({eta})")
+        .unwrap_or_else(|_| ProgressStyle::default_bar())
+        .tick_chars("◐◓◑◒")
+        .progress_chars("━━╸"));
 
     let mut file = File::create(path)?;
     let mut reader = response.into_body().into_reader();

@@ -4,6 +4,10 @@
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/dhimasardinata/caxe?label=latest%20version&color=green)](https://github.com/dhimasardinata/caxe/releases)
 [![GitHub all releases](https://img.shields.io/github/downloads/dhimasardinata/caxe/total?color=blue&label=downloads&logo=github)](https://github.com/dhimasardinata/caxe/releases)
 [![Crates.io](https://img.shields.io/crates/v/caxe.svg)](https://crates.io/crates/caxe)
+[![License](https://img.shields.io/crates/l/caxe.svg)](https://github.com/dhimasardinata/caxe#license)
+[![Docs](https://img.shields.io/badge/docs-rustdoc-blue)](https://docs.rs/caxe)
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-❤-pink?logo=github)](https://github.com/sponsors/dhimasardinata)
+
 
 **caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
 
@@ -182,6 +186,120 @@ board = "arduino:avr:uno"  # or "esp32:esp32:esp32"
 port = "COM3"              # optional, for upload
 ```
 
+## 🏗️ Architecture
+
+caxe is organized into modular components for maintainability:
+
+```
+src/
+├── main.rs           # CLI entry point & routing (~980 lines)
+├── commands/         # CLI command handlers
+│   ├── toolchain.rs  # cx toolchain commands
+│   ├── target.rs     # cx target commands
+│   ├── generate.rs   # cx generate cmake/ninja
+│   └── doctor.rs     # cx doctor, lock, sync
+├── build/            # Core build system
+│   ├── core.rs       # Parallel compilation engine
+│   ├── utils.rs      # Toolchain detection, std flags
+│   ├── test.rs       # Test runner
+│   ├── arduino.rs    # Arduino/IoT support
+│   └── feedback.rs   # Error message analysis
+├── deps/             # Dependency management
+│   ├── fetch.rs      # Git clone, prebuilt downloads
+│   ├── manage.rs     # Add/remove dependencies
+│   └── vendor.rs     # Vendor command
+├── toolchain/        # Compiler detection
+│   ├── windows.rs    # MSVC/vswhere discovery
+│   └── install.rs    # Toolchain installation wizard
+├── config.rs         # cx.toml parsing
+├── lock.rs           # cx.lock file handling
+├── registry.rs       # Library registry lookups
+└── [utilities]       # cache, ci, docker, ide, doc, etc.
+```
+
+**Key Design Principles:**
+- **Zero-config**: Sensible defaults, automatic toolchain detection
+- **Progressive disclosure**: Simple commands → advanced options
+- **Parallel by default**: Lock-free compilation using rayon
+- **Safety**: No panics, all errors handled with anyhow
+
+## 🧪 Running Tests
+
+```bash
+# Run all tests (unit + integration)
+cargo test
+
+# Run only unit tests
+cargo test --lib
+
+# Run only integration tests
+cargo test --test integration_test
+```
+
+**Test categories:**
+- `config.rs` - Config parsing, BuildConfig, Dependencies
+- `build/utils.rs` - MSVC/GCC standard flag generation
+- `build/feedback.rs` - Compiler error message parsing
+- `integration_test.rs` - End-to-end build scenarios
+
+## 🤝 Contributing
+
+Contributions are welcome! Here's how to get started:
+
+1. **Fork & Clone**
+   ```bash
+   git clone https://github.com/dhimasardinata/caxe.git
+   cd caxe
+   ```
+
+2. **Build & Test**
+   ```bash
+   cargo build
+   cargo test
+   cargo clippy  # Should have 0 warnings
+   ```
+
+3. **Code Style**
+   - Run `cargo fmt` before committing
+   - All new code should have tests
+   - Use `anyhow::Result` for error handling
+
+4. **Pull Request**
+   - Keep PRs focused on a single feature/fix
+   - Update documentation if needed
+
+## 💖 Sponsors
+
+If you find caxe useful, consider supporting its development:
+
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?logo=github)](https://github.com/sponsors/dhimasardinata)
+
+### 🪙 Crypto Donations
+
+| Network | Address |
+|---------|---------|
+| **Ethereum/Polygon/BSC** | `0x7e1a1a8c46817f297be14c14b587a0fa4b9e484b` |
+| **Solana** | `Bek24ZEPWHUJeTHQmDHtC7uHaHiH7TX8FmfYqtQu3Tt` |
+| **Bitcoin** | `bc1q4rm4e007u0f44vje694f422dy423dfc2caqz9z` |
+
+
+Your sponsorship helps with:
+- 🔧 Continued development and new features
+- 📚 Better documentation and examples
+- 🐛 Faster bug fixes and support
+- 🌍 Community growth
+
+
 ## 📝 License
 
-MIT
+Licensed under either of:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+---
+
+**Made with ❤️ for the C/C++ community**
+

@@ -1,3 +1,13 @@
+//! Docker configuration generator.
+//!
+//! This module provides the `cx docker` command which generates a multi-stage
+//! Dockerfile for containerized C/C++ builds.
+//!
+//! ## Generated Files
+//!
+//! - `Dockerfile` - Multi-stage build (Ubuntu-based)
+//! - `.dockerignore` - Excludes build artifacts
+
 use anyhow::{Context, Result};
 use colored::*;
 use std::fs;

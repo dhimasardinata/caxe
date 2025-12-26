@@ -1,3 +1,20 @@
+//! Terminal UI utilities.
+//!
+//! This module provides UI components for CLI output, including a responsive
+//! table with Unicode box-drawing characters.
+//!
+//! ## Components
+//!
+//! - `Table` - Auto-sizing table with headers and rows
+//!
+//! ## Example
+//!
+//! ```rust
+//! let mut table = Table::new(&["Name", "Value"]);
+//! table.add_row(vec!["key".to_string(), "value".to_string()]);
+//! table.print();
+//! ```
+
 use colored::*;
 use std::cmp;
 

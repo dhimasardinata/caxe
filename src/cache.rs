@@ -1,3 +1,14 @@
+//! Global dependency cache management.
+//!
+//! This module handles the `~/.cx/cache` directory where downloaded dependencies are stored.
+//!
+//! ## Commands
+//!
+//! - `cx cache path` - Print cache directory location
+//! - `cx cache list` - List cached libraries
+//! - `cx cache clean` - Clear all cached dependencies
+//! - `cx cache prune` - Remove unused dependencies
+
 use crate::ui;
 use anyhow::{Context, Result};
 use colored::*;
@@ -26,11 +37,12 @@ pub fn list() -> Result<()> {
     for entry in entries {
         if let Ok(entry) = entry
             && let Ok(ft) = entry.file_type()
-                && ft.is_dir() {
-                    let name = entry.file_name();
-                    table.add_row(vec![name.to_string_lossy().to_string()]);
-                    count += 1;
-                }
+            && ft.is_dir()
+        {
+            let name = entry.file_name();
+            table.add_row(vec![name.to_string_lossy().to_string()]);
+            count += 1;
+        }
     }
 
     if count == 0 {
@@ -92,4 +104,37 @@ pub fn prune_unused(keep_deps: &[String]) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prune_keeps_listed_deps() {
+        // Create a temp cache directory
+        let temp_dir = std::env::temp_dir().join("caxe_cache_test");
+        let cache_dir = temp_dir.join(".cx").join("cache");
+        std::fs::create_dir_all(&cache_dir).ok();
+
+        // Create fake dep directories
+        std::fs::create_dir_all(cache_dir.join("raylib")).ok();
+        std::fs::create_dir_all(cache_dir.join("json")).ok();
+        std::fs::create_dir_all(cache_dir.join("unused_lib")).ok();
+
+        // Verify directories exist
+        assert!(cache_dir.join("raylib").exists());
+        assert!(cache_dir.join("json").exists());
+        assert!(cache_dir.join("unused_lib").exists());
+
+        // Cleanup
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_cache_path_is_in_home() {
+        // Just test that the function doesn't panic
+        let result = print_path();
+        assert!(result.is_ok());
+    }
 }

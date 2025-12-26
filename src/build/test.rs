@@ -1,3 +1,14 @@
+//! Test runner for C/C++ unit tests.
+//!
+//! This module provides the `cx test` command which compiles and runs
+//! test files from the `tests/` directory.
+//!
+//! ## Features
+//!
+//! - Auto-links project sources for testing internals
+//! - Parallel test compilation
+//! - Test filtering with `--filter`
+
 use super::utils::{get_compiler, get_std_flag_gcc, get_std_flag_msvc, load_config};
 use crate::config::CxConfig;
 use anyhow::Result;
@@ -60,7 +71,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "o" || e == "obj") {
                 // Exclude main.o / main.obj to avoid multiple entry points
-                let stem = path.file_stem().unwrap().to_string_lossy();
+                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
                 if stem != "main" {
                     project_objs.push(path.to_path_buf());
                 }
@@ -79,13 +90,14 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
         let path = entry.path().to_path_buf();
         let is_cpp = path
             .extension()
-            .is_some_and(|ext| ["cpp", "cc", "cxx"].contains(&ext.to_str().unwrap()));
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ["cpp", "cc", "cxx"].contains(&ext));
         let is_c = path.extension().is_some_and(|ext| ext == "c");
 
         if is_cpp || is_c {
             // Apply Filter
             if let Some(f) = &filter {
-                let name = path.file_stem().unwrap().to_string_lossy();
+                let name = path.file_stem().unwrap_or_default().to_string_lossy();
                 if !name.contains(f) {
                     continue;
                 }
@@ -216,16 +228,20 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     let pb = ProgressBar::new((test_files.len() * 2) as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}")
-            .unwrap()
-            .progress_chars("#>-"),
+            .template("{bar:40.green/black} {pos:>3}/{len:3} [{elapsed_precise}] {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("●○·"),
     );
 
     // Phase 1: Parallel Compilation
     let compiled_results: Vec<(String, Option<String>)> = test_files
         .par_iter()
         .map(|(path, is_cpp)| {
-            let test_name = path.file_stem().unwrap().to_string_lossy().to_string();
+            let test_name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let output_bin = format!("build/tests/{}", test_name);
 
             // Caching Check: Compare mtime of test source vs test binary
@@ -289,7 +305,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
             cmd.args(&extra_cflags);
 
             if let Some(build_cfg) = &config.build
-                && let Some(flags) = &build_cfg.cflags
+                && let Some(flags) = build_cfg.get_flags()
             {
                 cmd.args(flags);
             }

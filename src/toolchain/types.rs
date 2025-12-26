@@ -1,3 +1,14 @@
+//! Toolchain type definitions.
+//!
+//! This module defines the core types for representing discovered compilers
+//! and their configurations.
+//!
+//! ## Key Types
+//!
+//! - [`CompilerType`] - MSVC, ClangCL, Clang, GCC
+//! - [`Toolchain`] - Full compiler configuration with paths and env vars
+//! - [`ToolchainError`] - Error types for toolchain operations
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;

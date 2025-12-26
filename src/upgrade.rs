@@ -1,3 +1,14 @@
+//! Self-upgrade functionality.
+//!
+//! This module provides the `cx upgrade` command which downloads and installs
+//! the latest version of caxe from GitHub releases.
+//!
+//! ## Features
+//!
+//! - Version comparison using semver
+//! - Platform-specific binary download
+//! - In-place binary replacement
+
 use anyhow::{Context, Result};
 use colored::*;
 use semver::Version;
@@ -85,9 +96,10 @@ pub fn check_and_upgrade() -> Result<()> {
     let pb = indicatif::ProgressBar::new(total_size);
     pb.set_style(
         indicatif::ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
+            .template("{spinner:.blue} [{elapsed_precise}] [{bar:40.green/black}] {bytes}/{total_bytes} ({eta})")
+            .unwrap_or_else(|_| indicatif::ProgressStyle::default_bar())
+            .tick_chars("◐◓◑◒")
+            .progress_chars("━━╸"),
     );
     pb.set_message("Downloading...");
 

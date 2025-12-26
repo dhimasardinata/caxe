@@ -1,3 +1,14 @@
+//! Build artifact cleanup.
+//!
+//! This module provides the `cx clean` command for removing build outputs.
+//!
+//! ## Options
+//!
+//! - `cx clean` - Remove build directory
+//! - `cx clean --cache` - Also clear global dependency cache
+//! - `cx clean --all` - Remove docs and all generated files
+//! - `cx clean --unused` - Prune unused cached dependencies
+
 use anyhow::{Context, Result};
 use colored::*;
 

@@ -1,3 +1,14 @@
+//! IDE configuration generators.
+//!
+//! This module provides the `cx setup-ide` command which generates configuration
+//! files for development environments, currently focused on Visual Studio Code.
+//!
+//! ## Generated Files
+//!
+//! - `.vscode/tasks.json` - Build and test tasks
+//! - `.vscode/launch.json` - Debug configuration
+//! - `.vscode/c_cpp_properties.json` - IntelliSense settings
+
 use crate::config::CxConfig;
 use anyhow::{Context, Result};
 use colored::*;

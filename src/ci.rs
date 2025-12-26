@@ -1,3 +1,12 @@
+//! CI/CD configuration generator.
+//!
+//! This module provides the `cx ci` command which generates GitHub Actions
+//! workflow files for continuous integration.
+//!
+//! ## Generated Files
+//!
+//! - `.github/workflows/caxe.yml` - Build and test workflow
+
 use anyhow::{Context, Result};
 use colored::*;
 use std::fs;

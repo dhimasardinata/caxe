@@ -10,12 +10,17 @@ use std::process::Command;
 // --- Helper: Load Config with Profile Parsing ---
 pub fn load_config() -> Result<CxConfig> {
     if !Path::new("cx.toml").exists() {
-        return Err(anyhow::anyhow!("cx.toml not found"));
+        return Err(anyhow::anyhow!(
+            "cx.toml not found in current directory.\n\n\
+            💡 Tip: Run 'cx init' to create one, or 'cx new <name>' for a new project."
+        ));
     }
-    let config_str = fs::read_to_string("cx.toml")?;
+    let config_str =
+        fs::read_to_string("cx.toml").context("Failed to read cx.toml - check file permissions")?;
 
     // Parse as raw TOML Value first to extract [profile:*] tables
-    let raw_value: toml::Value = toml::from_str(&config_str).context("Failed to parse cx.toml")?;
+    let raw_value: toml::Value = toml::from_str(&config_str)
+        .context("Failed to parse cx.toml - check for syntax errors (missing quotes, brackets)")?;
 
     // Extract profiles from [profile:name] tables
     let mut profiles: HashMap<String, Profile> = HashMap::new();
@@ -38,12 +43,13 @@ pub fn load_config() -> Result<CxConfig> {
 
     // Deprecation warning for cflags
     if let Some(ref build_cfg) = config.build
-        && build_cfg.uses_deprecated_cflags() {
-            eprintln!(
-                "   {} 'cflags' is deprecated, please use 'flags' instead in [build]",
-                "⚠".yellow()
-            );
-        }
+        && build_cfg.uses_deprecated_cflags()
+    {
+        eprintln!(
+            "   {} 'cflags' is deprecated, please use 'flags' instead in [build]",
+            "⚠".yellow()
+        );
+    }
 
     Ok(config)
 }
@@ -269,5 +275,81 @@ pub fn get_std_flag_gcc(edition: &str) -> String {
 
         // Default: use as-is with -std= prefix
         _ => format!("-std={}", edition_clean),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_std_flag_msvc_cpp_standards() {
+        assert_eq!(get_std_flag_msvc("c++14"), "/std:c++14");
+        assert_eq!(get_std_flag_msvc("c++17"), "/std:c++17");
+        assert_eq!(get_std_flag_msvc("c++20"), "/std:c++20");
+        assert_eq!(get_std_flag_msvc("c++23"), "/std:c++latest");
+    }
+
+    #[test]
+    fn test_get_std_flag_msvc_c_standards() {
+        assert_eq!(get_std_flag_msvc("c11"), "/std:c11");
+        assert_eq!(get_std_flag_msvc("c17"), "/std:c17");
+        assert_eq!(get_std_flag_msvc("c23"), "/std:clatest");
+    }
+
+    #[test]
+    fn test_get_std_flag_msvc_fallbacks() {
+        // MSVC doesn't support old C standards, falls back
+        assert_eq!(get_std_flag_msvc("c89"), "/std:c11");
+        assert_eq!(get_std_flag_msvc("c99"), "/std:c11");
+        // Old C++ standards fall back to c++14
+        assert_eq!(get_std_flag_msvc("c++98"), "/std:c++14");
+        assert_eq!(get_std_flag_msvc("c++11"), "/std:c++14");
+    }
+
+    #[test]
+    fn test_get_std_flag_msvc_passthrough() {
+        assert_eq!(get_std_flag_msvc("/std:c++20"), "/std:c++20");
+    }
+
+    #[test]
+    fn test_get_std_flag_gcc_cpp_standards() {
+        assert_eq!(get_std_flag_gcc("c++11"), "-std=c++11");
+        assert_eq!(get_std_flag_gcc("c++14"), "-std=c++14");
+        assert_eq!(get_std_flag_gcc("c++17"), "-std=c++17");
+        assert_eq!(get_std_flag_gcc("c++20"), "-std=c++20");
+        assert_eq!(get_std_flag_gcc("c++23"), "-std=c++23");
+        assert_eq!(get_std_flag_gcc("c++26"), "-std=c++26");
+    }
+
+    #[test]
+    fn test_get_std_flag_gcc_c_standards() {
+        assert_eq!(get_std_flag_gcc("c89"), "-std=c89");
+        assert_eq!(get_std_flag_gcc("c99"), "-std=c99");
+        assert_eq!(get_std_flag_gcc("c11"), "-std=c11");
+        assert_eq!(get_std_flag_gcc("c17"), "-std=c17");
+        assert_eq!(get_std_flag_gcc("c23"), "-std=c23");
+    }
+
+    #[test]
+    fn test_get_std_flag_gcc_gnu_extensions() {
+        assert_eq!(get_std_flag_gcc("gnu++17"), "-std=gnu++17");
+        assert_eq!(get_std_flag_gcc("gnu++20"), "-std=gnu++20");
+        assert_eq!(get_std_flag_gcc("gnu11"), "-std=gnu11");
+    }
+
+    #[test]
+    fn test_get_std_flag_gcc_aliases() {
+        assert_eq!(get_std_flag_gcc("c++0x"), "-std=c++11");
+        assert_eq!(get_std_flag_gcc("c++1y"), "-std=c++14");
+        assert_eq!(get_std_flag_gcc("c++1z"), "-std=c++17");
+        assert_eq!(get_std_flag_gcc("c++2a"), "-std=c++20");
+        assert_eq!(get_std_flag_gcc("c++2b"), "-std=c++23");
+        assert_eq!(get_std_flag_gcc("c2x"), "-std=c23");
+    }
+
+    #[test]
+    fn test_get_std_flag_gcc_strip_prefix() {
+        assert_eq!(get_std_flag_gcc("-std=c++20"), "-std=c++20");
     }
 }

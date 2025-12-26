@@ -40,3 +40,51 @@ impl LockFile {
         self.packages.insert(name, PackageLock { git, rev });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lockfile_insert_and_get() {
+        let mut lock = LockFile::default();
+        lock.insert(
+            "fmt".to_string(),
+            "https://github.com/fmtlib/fmt".to_string(),
+            "abc123".to_string(),
+        );
+        let entry = lock.get("fmt").unwrap();
+        assert_eq!(entry.git, "https://github.com/fmtlib/fmt");
+        assert_eq!(entry.rev, "abc123");
+    }
+
+    #[test]
+    fn test_lockfile_get_missing() {
+        let lock = LockFile::default();
+        assert!(lock.get("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_lockfile_serialization() {
+        let mut lock = LockFile::default();
+        lock.insert(
+            "json".to_string(),
+            "https://github.com/nlohmann/json".to_string(),
+            "v3.11.2".to_string(),
+        );
+        let toml_str = toml::to_string_pretty(&lock).unwrap();
+        assert!(toml_str.contains("json"));
+        assert!(toml_str.contains("v3.11.2"));
+    }
+
+    #[test]
+    fn test_lockfile_parse() {
+        let toml_str = r#"
+[package]
+fmt = { git = "https://github.com/fmtlib/fmt", rev = "abc123" }
+"#;
+        let lock: LockFile = toml::from_str(toml_str).unwrap();
+        let entry = lock.get("fmt").unwrap();
+        assert_eq!(entry.rev, "abc123");
+    }
+}

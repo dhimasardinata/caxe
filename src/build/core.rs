@@ -1,3 +1,16 @@
+//! Core compilation engine.
+//!
+//! This is the heart of caxe - the parallel compilation system that transforms
+//! C/C++ source files into executables.
+//!
+//! ## Features
+//!
+//! - Lock-free parallel compilation using rayon
+//! - Incremental builds (only recompile changed files)
+//! - Compile commands JSON generation for IDE integration
+//! - Chrome trace profiling output
+//! - LTO and sanitizer support
+
 use super::utils::{get_compiler, get_std_flag_gcc, get_std_flag_msvc, load_config, run_script};
 use crate::config::CxConfig;
 use crate::deps;
@@ -577,7 +590,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         if !pch_source.exists() {
             println!("{} PCH file not found: {}", "!".yellow(), pch_str);
         } else {
-            let pch_name = pch_source.file_name().unwrap().to_string_lossy();
+            let pch_name = pch_source.file_name().unwrap_or_default().to_string_lossy();
 
             if is_msvc {
                 let pch_out = obj_dir.join(format!("{}.pch", pch_name));
@@ -635,10 +648,13 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 // Output: build/header.hpp.gch
                 let pch_out = obj_dir.join(format!("{}.gch", pch_name));
                 let need_pch = !pch_out.exists()
-                    || pch_source.metadata().unwrap().modified().unwrap()
+                    || pch_source
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
                         > pch_out
                             .metadata()
-                            .map(|m| m.modified().unwrap())
+                            .and_then(|m| m.modified())
                             .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
 
                 if need_pch {
@@ -686,9 +702,10 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
 
     // 6. Parallel Compilation (Lock-Free Optimization)
     let spinner_style = ProgressStyle::default_spinner()
-        .template("{spinner:.green} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
-        .unwrap()
-        .progress_chars("#>-");
+        .template("{spinner:.cyan} [{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} {msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_spinner())
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+        .progress_chars("█▓░");
 
     let pb = ProgressBar::new(source_files.len() as u64);
     pb.set_style(spinner_style);
@@ -854,7 +871,10 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             // Profiling End
             if let Some(events) = &trace_events {
                 let duration = compile_start.elapsed();
-                let ts = compile_start.duration_since(build_start_time).as_micros();
+                let ts = compile_start
+                    .checked_duration_since(build_start_time)
+                    .unwrap_or_default()
+                    .as_micros();
                 let dur = duration.as_micros();
                 // Capture thread ID (best effort)
                 let tid = rayon::current_thread_index().unwrap_or(0);
@@ -889,7 +909,9 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     {
         let json = serde_json::to_string(&*locked)?;
         let trace_path = Path::new(".cx").join("build").join("build_trace.json");
-        fs::create_dir_all(trace_path.parent().unwrap())?;
+        if let Some(parent) = trace_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
         fs::write(&trace_path, json)?;
         println!(
             "   {} Build trace saved to {} (Chrome Tracing)",
@@ -905,7 +927,9 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     // 6. Generate compile_commands.json in .cx/build/
     let json_str = serde_json::to_string_pretty(&json_entries)?;
     let compile_commands_path = Path::new(".cx").join("build").join("compile_commands.json");
-    fs::create_dir_all(compile_commands_path.parent().unwrap())?;
+    if let Some(parent) = compile_commands_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(&compile_commands_path, json_str)?;
 
     // 7. Linking
@@ -1037,6 +1061,17 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             for search_path in &lib_search_paths {
                 cmd.arg(format!("/LIBPATH:{}", search_path.display()));
             }
+            // Add subsystem flag if specified (e.g., for SDL2 with SDL2main.lib)
+            if let Some(build_cfg) = &config.build
+                && let Some(subsystem) = &build_cfg.subsystem
+            {
+                let subsystem_flag = match subsystem.to_lowercase().as_str() {
+                    "windows" => "/SUBSYSTEM:WINDOWS",
+                    "console" => "/SUBSYSTEM:CONSOLE",
+                    _ => "/SUBSYSTEM:CONSOLE",
+                };
+                cmd.arg(subsystem_flag);
+            }
         }
 
         // Apply toolchain environment variables (LIB, LIBPATH, etc.)
@@ -1115,16 +1150,42 @@ pub fn build_and_run(
             s == "cpp" || s == "cc" || s == "cxx"
         });
 
-        // Use 'auto' - compiler detection happens inside build_project
-        let mut cfg =
-            crate::config::create_ephemeral_config(&file_stem, &file_stem, "auto", has_cpp);
+        // Try to load cx.toml first - this preserves project settings (deps, flags, libs)
+        // Only fall back to ephemeral config if no cx.toml exists
 
-        // Set explicit source path
-        if let Some(build_cfg) = &mut cfg.build {
-            build_cfg.sources = Some(vec![final_path.to_string_lossy().to_string()]);
+        match load_config() {
+            Ok(mut project_cfg) => {
+                if verbose {
+                    eprintln!("{} Using cx.toml settings for script build", "📦".cyan());
+                }
+                // Override sources to build only this file, but keep everything else
+                if let Some(build_cfg) = &mut project_cfg.build {
+                    build_cfg.sources = Some(vec![final_path.to_string_lossy().to_string()]);
+                    // Use file stem as binary name for script builds
+                    build_cfg.bin = Some(file_stem.to_string());
+                } else {
+                    // No [build] section, create one with just sources
+                    project_cfg.build = Some(crate::config::BuildConfig {
+                        sources: Some(vec![final_path.to_string_lossy().to_string()]),
+                        bin: Some(file_stem.to_string()),
+                        ..Default::default()
+                    });
+                }
+                project_cfg
+            }
+            Err(_) => {
+                // No cx.toml - use ephemeral config (pure script mode)
+                if verbose {
+                    eprintln!("{} No cx.toml found, using ephemeral config", "⚡".yellow());
+                }
+                let mut ephemeral =
+                    crate::config::create_ephemeral_config(&file_stem, &file_stem, "auto", has_cpp);
+                if let Some(build_cfg) = &mut ephemeral.build {
+                    build_cfg.sources = Some(vec![final_path.to_string_lossy().to_string()]);
+                }
+                ephemeral
+            }
         }
-
-        cfg
     } else {
         // SCENARIO 2: Project Mode (cx.toml) OR Default Script
         match load_config() {
@@ -1177,7 +1238,7 @@ pub fn build_and_run(
                     if let Some(p) = found {
                         eprintln!("{} No cx.toml found, running: {}", "⚡".yellow(), p);
                         let path = Path::new(p);
-                        let stem = path.file_stem().unwrap().to_string_lossy();
+                        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
                         let has_cpp = path.extension().is_some_and(|e| {
                             let s = e.to_string_lossy();
                             s == "cpp" || s == "cc" || s == "cxx"

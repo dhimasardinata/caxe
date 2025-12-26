@@ -41,9 +41,9 @@ EXTRACT_ALL            = YES
     let pb = indicatif::ProgressBar::new_spinner();
     pb.set_style(
         indicatif::ProgressStyle::default_spinner()
-            .template("{spinner:.green} {msg}")
-            .unwrap()
-            .tick_chars("-\\|/"),
+            .template("{spinner:.magenta} {msg}")
+            .unwrap_or_else(|_| indicatif::ProgressStyle::default_spinner())
+            .tick_chars("◜◠◝◞◡◟"),
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(100));
     pb.set_message("Running Doxygen...");

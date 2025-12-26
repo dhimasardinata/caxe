@@ -1,3 +1,14 @@
+//! Dependency vendoring for offline builds.
+//!
+//! This module provides the `cx vendor` command which copies cached dependencies
+//! into a local `vendor/` directory for reproducible, offline builds.
+//!
+//! ## Usage
+//!
+//! ```bash
+//! cx vendor  # Copies ~/.cx/cache/* to ./vendor/
+//! ```
+
 use crate::build::load_config;
 use crate::config::Dependency;
 use anyhow::{Context, Result};
@@ -39,7 +50,9 @@ pub fn vendor_dependencies() -> Result<()> {
 
     for (name, dep) in deps {
         // Skip pkg-config deps
-        if let Dependency::Complex { pkg: Some(_), .. } = dep { continue }
+        if let Dependency::Complex { pkg: Some(_), .. } = dep {
+            continue;
+        }
 
         let source_path = cache_dir.join(&name);
         let dest_path = vendor_dir.join(&name);

@@ -1,3 +1,12 @@
+//! Arduino/IoT build and upload support.
+//!
+//! This module provides Arduino integration using `arduino-cli`.
+//!
+//! ## Commands
+//!
+//! - `cx build --arduino` - Compile Arduino sketch
+//! - `cx upload -p <PORT>` - Upload to board
+
 use anyhow::{Context, Result, bail};
 use colored::*;
 use std::process::Command;
@@ -49,11 +58,12 @@ pub fn build_arduino(verbose: bool) -> Result<()> {
 
     // Add any extra flags from config
     if let Some(arduino_config) = &config.arduino
-        && let Some(flags) = &arduino_config.flags {
-            for flag in flags {
-                cmd.arg(flag);
-            }
+        && let Some(flags) = &arduino_config.flags
+    {
+        for flag in flags {
+            cmd.arg(flag);
         }
+    }
 
     // Add sketch path
     cmd.arg(&sketch_path);
@@ -141,9 +151,10 @@ fn find_sketch() -> Result<std::path::PathBuf> {
 fn get_board(config: &CxConfig) -> Result<String> {
     // Check config first
     if let Some(arduino) = &config.arduino
-        && let Some(board) = &arduino.board {
-            return Ok(board.clone());
-        }
+        && let Some(board) = &arduino.board
+    {
+        return Ok(board.clone());
+    }
 
     // Default to Arduino Uno
     println!(

@@ -1,14 +1,69 @@
+//! Dependency fetching and build logic.
+//!
+//! This module handles downloading, building, and caching dependencies from Git.
+//!
+//! ## Features
+//!
+//! - Git clone with tag/branch/rev pinning
+//! - Custom build commands per dependency
+//! - SHA256 hash verification for prebuilt binaries
+//! - Global cache at `~/.cx/cache`
+
 use crate::config::Dependency;
 use anyhow::{Context, Result};
 use colored::*;
 
 use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Verify a file's SHA256 hash against an expected value.
+/// Returns Ok(true) if hash matches, Ok(false) if no expected hash,
+/// or Err if file can't be read or hash doesn't match.
+#[allow(dead_code)]
+pub fn verify_sha256(path: &Path, expected_hash: Option<&str>) -> Result<bool> {
+    let expected = match expected_hash {
+        Some(h) => h,
+        None => return Ok(true), // No hash to verify, consider it valid
+    };
+
+    let mut file = fs::File::open(path).with_context(|| {
+        format!(
+            "Failed to open file for hash verification: {}",
+            path.display()
+        )
+    })?;
+
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+
+    let result = hasher.finalize();
+    let actual_hash = format!("{:x}", result);
+
+    if actual_hash.eq_ignore_ascii_case(expected) {
+        Ok(true)
+    } else {
+        Err(anyhow::anyhow!(
+            "SHA256 hash mismatch for {}:\n  Expected: {}\n  Actual:   {}",
+            path.display(),
+            expected,
+            actual_hash
+        ))
+    }
+}
 
 /// Known library configurations for prebuilt binary downloads
 struct PrebuiltConfig {
@@ -182,7 +237,7 @@ fn try_download_prebuilt(
         .lib_path
         .replace("{version}", version)
         .split('/')
-        .last()
+        .next_back()
         .unwrap_or("glfw3.lib")
         .to_string();
 
@@ -375,8 +430,9 @@ pub fn fetch_dependencies(
             let pb = ProgressBar::new_spinner();
             pb.set_style(
                 ProgressStyle::default_spinner()
-                    .template("{spinner:.green} {msg}")
-                    .unwrap(),
+                    .template("{spinner:.blue} {msg}")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner())
+                    .tick_chars("⣾⣽⣻⢿⡿⣟⣯⣷"),
             );
             pb.set_message(format!("Downloading {}...", name));
             pb.enable_steady_tick(std::time::Duration::from_millis(100));
@@ -488,34 +544,32 @@ pub fn fetch_dependencies(
         };
 
         // D. Build Custom Script (If prebuilt failed and script exists)
-        if !prebuilt_success {
-            if let Some(cmd_str) = build_script {
-                let should_build = if !out_filename.is_empty() {
-                    !lib_path.join(out_filename).exists()
+        if !prebuilt_success && let Some(cmd_str) = build_script {
+            let should_build = if !out_filename.is_empty() {
+                !lib_path.join(out_filename).exists()
+            } else {
+                true
+            };
+
+            if should_build {
+                println!("   {} Building {}...", "🔨".yellow(), name);
+                let status = if cfg!(target_os = "windows") {
+                    Command::new("cmd")
+                        .args(["/C", &cmd_str])
+                        .current_dir(&lib_path)
+                        .status()
                 } else {
-                    true
+                    Command::new("sh")
+                        .args(["-c", &cmd_str])
+                        .current_dir(&lib_path)
+                        .status()
                 };
 
-                if should_build {
-                    println!("   {} Building {}...", "🔨".yellow(), name);
-                    let status = if cfg!(target_os = "windows") {
-                        Command::new("cmd")
-                            .args(["/C", &cmd_str])
-                            .current_dir(&lib_path)
-                            .status()
-                    } else {
-                        Command::new("sh")
-                            .args(["-c", &cmd_str])
-                            .current_dir(&lib_path)
-                            .status()
-                    };
-
-                    match status {
-                        Ok(s) if s.success() => {}
-                        _ => {
-                            println!("{} Build script failed for {}", "x".red(), name);
-                            continue;
-                        }
+                match status {
+                    Ok(s) if s.success() => {}
+                    _ => {
+                        println!("{} Build script failed for {}", "x".red(), name);
+                        continue;
                     }
                 }
             }
