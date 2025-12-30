@@ -3,6 +3,10 @@
         "url": "https://github.com/abseil/abseil-cpp.git",
         "description": "Abseil Common Libraries (C++)"
     },
+    "daxe": {
+        "url": "https://github.com/dhimasardinata/daxe.git",
+        "description": "D.A's Axe - Cut through C++ verbosity"
+    },
     "acl": {
         "url": "https://github.com/acl-dev/acl.git",
         "description": "Advanced C/C++ library for network/server development"

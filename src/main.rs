@@ -208,6 +208,11 @@ enum Commands {
         #[command(subcommand)]
         op: Option<ToolchainOp>,
     },
+    /// Manage frameworks (daxe, fmt, json, etc.)
+    Framework {
+        #[command(subcommand)]
+        op: Option<FrameworkOp>,
+    },
     /// Diagnose system and project issues
     Doctor,
     /// Vendor dependencies into local directory
@@ -304,7 +309,44 @@ enum GenerateFormat {
     CompileCommands,
 }
 
+#[derive(Subcommand)]
+enum FrameworkOp {
+    /// List all available frameworks
+    List,
+    /// Interactively select a framework
+    Select,
+    /// Add a specific framework to the project
+    Add {
+        /// Framework name (daxe, fmt, json, catch2, spdlog)
+        name: String,
+    },
+    /// Remove framework from project
+    Remove {
+        /// Framework name
+        name: String,
+    },
+    /// Show framework info
+    Info {
+        /// Framework name
+        name: String,
+    },
+}
+
 fn main() -> Result<()> {
+    // Set Windows console to UTF-8 mode for proper Unicode output
+    #[cfg(windows)]
+    {
+        unsafe {
+            #[link(name = "kernel32")]
+            unsafe extern "system" {
+                fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+                fn SetConsoleCP(wCodePageID: u32) -> i32;
+            }
+            SetConsoleOutputCP(65001);
+            SetConsoleCP(65001);
+        }
+    }
+
     let cli = Cli::parse();
 
     match &cli.command {
@@ -437,7 +479,11 @@ fn main() -> Result<()> {
                 // Let's just finish here. The loop built the members.
                 Ok(())
             } else {
-                build::build_project(&config, &options).map(|_| ())
+                match build::build_project(&config, &options) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => std::process::exit(1),
+                    Err(e) => Err(e),
+                }
             }
         }
 
@@ -446,7 +492,25 @@ fn main() -> Result<()> {
             verbose,
             dry_run,
             args,
-        }) => build::build_and_run(*release, *verbose, *dry_run, args.clone(), None),
+        }) => {
+            // Detect script mode: if first arg looks like a source file, use it as script_path
+            let (script_path, run_args) = if !args.is_empty() {
+                let first_arg = &args[0];
+                let path = Path::new(first_arg);
+                let is_source = path.extension().is_some_and(|ext| {
+                    let s = ext.to_string_lossy().to_lowercase();
+                    ["cpp", "cc", "cxx", "c", "cppm", "ixx", "mpp"].contains(&s.as_str())
+                });
+                if is_source {
+                    (Some(first_arg.clone()), args[1..].to_vec())
+                } else {
+                    (None, args.clone())
+                }
+            } else {
+                (None, args.clone())
+            };
+            build::build_and_run(*release, *verbose, *dry_run, run_args, script_path)
+        }
 
         Some(Commands::Watch { test }) => build::watch(*test),
         Some(Commands::Clean { cache, all, unused }) => build::clean(*cache, *all, *unused),
@@ -487,6 +551,22 @@ fn main() -> Result<()> {
                 ToolchainOp::Update => commands::toolchain::ToolchainOp::Update,
             });
             commands::toolchain::handle_toolchain_command(&local_op)
+        }
+        Some(Commands::Framework { op }) => {
+            let local_op = op.as_ref().map(|o| match o {
+                FrameworkOp::List => commands::framework::FrameworkOp::List,
+                FrameworkOp::Select => commands::framework::FrameworkOp::Select,
+                FrameworkOp::Add { name } => {
+                    commands::framework::FrameworkOp::Add { name: name.clone() }
+                }
+                FrameworkOp::Remove { name } => {
+                    commands::framework::FrameworkOp::Remove { name: name.clone() }
+                }
+                FrameworkOp::Info { name } => {
+                    commands::framework::FrameworkOp::Info { name: name.clone() }
+                }
+            });
+            commands::framework::handle_framework_command(&local_op)
         }
         Some(Commands::Doctor) => commands::doctor::run_doctor(),
         Some(Commands::Vendor) => deps::vendor_dependencies(),

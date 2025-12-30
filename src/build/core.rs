@@ -325,10 +325,17 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     }
 
     // 2. Setup Directories
-    let profile = if release { "release" } else { "debug" };
-    let build_dir = Path::new(".cx").join("build").join(profile);
+    let base_build_dir = PathBuf::from(".cx");
+    let build_dir = if release {
+        base_build_dir.join("release")
+    } else {
+        base_build_dir.join("debug")
+    };
     let obj_dir = build_dir.join("obj");
+    let bin_dir = build_dir.join("bin");
+
     fs::create_dir_all(&obj_dir)?;
+    fs::create_dir_all(&bin_dir)?;
 
     let bin_basename = if let Some(build_cfg) = &config.build {
         build_cfg.bin.clone().unwrap_or(config.package.name.clone())
@@ -344,7 +351,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         bin_basename
     };
 
-    let output_bin = build_dir.join(&bin_name);
+    let output_bin = bin_dir.join(&bin_name);
 
     if verbose {
         println!("{}", "Paths:".bold());
@@ -367,8 +374,65 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         dep_libs = libs;
     }
 
+    // 3a. Add local include paths from [build].include
+    if let Some(build_cfg) = &config.build
+        && let Some(includes) = &build_cfg.include
+    {
+        for inc in includes {
+            let inc_path = Path::new(inc);
+            if inc_path.exists() {
+                include_paths.push(inc_path.to_path_buf());
+            } else {
+                // Try relative to current directory
+                let abs_path = current_dir.join(inc);
+                if abs_path.exists() {
+                    include_paths.push(abs_path);
+                }
+            }
+        }
+    }
+
+    // 3b. Framework Support - auto-fetch framework dependencies
+    if let Some(build_cfg) = &config.build
+        && let Some(framework) = &build_cfg.framework
+    {
+        let framework_lower = framework.to_lowercase();
+        match framework_lower.as_str() {
+            "daxe" => {
+                println!(
+                    "   {} Using framework: {}",
+                    "🪓".yellow(),
+                    "daxe".cyan().bold()
+                );
+                // Auto-add daxe as dependency
+                let mut daxe_deps = std::collections::HashMap::new();
+                daxe_deps.insert(
+                    "daxe".to_string(),
+                    crate::config::Dependency::Simple(
+                        "https://github.com/dhimasardinata/daxe.git".to_string(),
+                    ),
+                );
+                let (paths, cflags, libs) = deps::fetch_dependencies(&daxe_deps)?;
+                include_paths.extend(paths);
+                extra_cflags.extend(cflags);
+                dep_libs.extend(libs);
+            }
+            "arduino" => {
+                // Arduino mode is handled separately via config.arduino
+                println!(
+                    "   {} Framework 'arduino' - use [arduino] section instead",
+                    "ℹ".blue()
+                );
+            }
+            _ => {
+                println!("   {} Unknown framework: {}", "⚠".yellow(), framework);
+            }
+        }
+    }
+
     // 4. Collect Source Files
     let mut source_files = Vec::new();
+    let mut module_files = Vec::new(); // New: Collect module interfaces
     let mut has_cpp = false;
 
     if let Some(build_cfg) = &config.build
@@ -382,7 +446,11 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                     if s != "c" {
                         has_cpp = true;
                     }
-                    source_files.push(path.to_owned());
+                    if ["cppm", "ixx", "mpp"].contains(&s.as_ref()) {
+                        module_files.push(path.to_owned());
+                    } else {
+                        source_files.push(path.to_owned());
+                    }
                 }
             } else {
                 println!("{} Source file not found: {}", "!".yellow(), src);
@@ -393,17 +461,26 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             let path = entry.path();
             if let Some(ext) = path.extension() {
                 let s = ext.to_string_lossy();
-                if ["cpp", "cc", "cxx", "c"].contains(&s.as_ref()) {
+                if ["cpp", "cc", "cxx", "c", "cppm", "ixx", "mpp"].contains(&s.as_ref()) {
                     if s != "c" {
                         has_cpp = true;
                     }
-                    source_files.push(path.to_owned());
+                    if ["cppm", "ixx", "mpp"].contains(&s.as_ref()) {
+                        module_files.push(path.to_owned());
+                    } else {
+                        source_files.push(path.to_owned());
+                    }
                 }
             }
         }
     }
 
-    if source_files.is_empty() {
+    // Sort modules to ensure deterministic order (though dependencies might require specific order)
+    // For MVP, if daxe.cppm depends on nothing but std, order doesn't matter much.
+    // If multiple modules exist, user might need to order sources manually or we implement deps scan.
+    module_files.sort();
+
+    if source_files.is_empty() && module_files.is_empty() {
         println!("{} No source files found.", "!".yellow());
         return Ok(false);
     }
@@ -445,11 +522,10 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         }
     }
 
-    let is_msvc = compiler.contains("cl.exe") || compiler == "cl";
+    let is_clang_cl = compiler.contains("clang-cl");
+    let is_msvc = (compiler.contains("cl.exe") || compiler == "cl") && !is_clang_cl;
     // let is_clang = compiler.contains("clang");
     // let is_gcc = compiler.contains("g++") || compiler.contains("gcc");
-
-    let current_dir_str = current_dir.to_string_lossy().to_string();
 
     // Verbose: Show toolchain info
     if verbose {
@@ -511,6 +587,22 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             // Very limited MSVC AddressSanitizer support exists in newer VS, but args differ.
             // For now, warn user it might not work as expected or requires specific VS version.
             common_flags.push(format!("/fsanitize={}", checks)); // Recent MSVC uses this syntax
+        }
+    }
+
+    // UTF-8 Encoding Flags
+    let use_utf8 = config
+        .build
+        .as_ref()
+        .map(|b| b.encoding.as_str() == "utf-8")
+        .unwrap_or(true); // Default to UTF-8
+
+    if use_utf8 {
+        if is_msvc {
+            common_flags.push("/utf-8".to_string()); // UTF-8 source and execution charset
+        } else {
+            common_flags.push("-finput-charset=UTF-8".to_string());
+            common_flags.push("-fexec-charset=UTF-8".to_string());
         }
     }
 
@@ -692,6 +784,114 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         }
     }
 
+    // 5c. Module Compilation (Sequential)
+    let mut module_results = Vec::new();
+    if !module_files.is_empty() {
+        println!("{} Compiling modules...", "📦".cyan());
+
+        for src_path in &module_files {
+            let stem = src_path
+                .file_stem()
+                .unwrap_or(src_path.as_os_str())
+                .to_string_lossy();
+            let obj_ext = if is_msvc { "obj" } else { "o" };
+            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+
+            // Construct Arguments
+            let mut args = Vec::new();
+            if let Some(wrapper) = ccache_prefix {
+                args.push(wrapper.to_string());
+            }
+            args.push(compiler.clone());
+
+            // Module Flags
+            if !is_msvc {
+                // GCC requires -fmodules-ts (Check for gcc/g++ but EXCLUDE clang)
+                if (compiler.contains("gcc") || compiler.contains("g++"))
+                    && !compiler.contains("clang")
+                {
+                    args.push("-fmodules-ts".to_string());
+                }
+            } else {
+                args.push("/interface".to_string()); // MSVC module interface
+                args.push("/TP".to_string()); // Compile as C++
+            }
+
+            // Standard Flags copy-paste (simplified for modules)
+            // Adjust paths for running inside .cx
+            let effective_src = Path::new("..").join(src_path);
+            let effective_obj = obj_path.strip_prefix(".cx").unwrap_or(&obj_path);
+
+            if is_msvc {
+                args.push("/nologo".to_string());
+                args.push("/c".to_string());
+                args.push("/EHsc".to_string());
+                args.push(effective_src.to_string_lossy().to_string());
+                args.push(format!("/Fo{}", effective_obj.to_string_lossy()));
+                args.push(get_std_flag_msvc(&config.package.edition));
+            } else {
+                args.push("-fdiagnostics-color=always".to_string());
+                args.push("-c".to_string());
+                args.push(effective_src.to_string_lossy().to_string());
+                args.push("-o".to_string());
+                args.push(effective_obj.to_string_lossy().to_string());
+                args.push(get_std_flag_gcc(&config.package.edition));
+            }
+
+            if release {
+                if is_msvc {
+                    args.push("/O2".to_string());
+                } else {
+                    args.push("-O3".to_string());
+                }
+            } else if is_msvc {
+                args.push("/Z7".to_string());
+            } else {
+                args.push("-g".to_string());
+            }
+
+            // Defines / Includes
+            if let Some(build_cfg) = &config.build
+                && let Some(flags) = build_cfg.get_flags()
+            {
+                for flag in flags {
+                    args.push(flag.clone());
+                }
+            }
+            args.extend(common_flags.iter().cloned());
+            // No PCH for modules usually
+
+            // Run Compiler inside .cx
+            let mut cmd = Command::new(&args[0]);
+            cmd.args(&args[1..]);
+            cmd.current_dir(".cx"); // Force gcm.cache to be in .cx
+            if !toolchain_env.is_empty() {
+                cmd.envs(&toolchain_env);
+            }
+
+            let output = cmd.output()?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                println!(
+                    "{} Failed to compile module {}:\n{}",
+                    "x".red(),
+                    src_path.display(),
+                    stderr
+                );
+                return Ok(false);
+            }
+
+            // Collect result
+            let cx_abs = current_dir.join(".cx");
+            let entry = json!({
+                "directory": cx_abs.to_string_lossy().to_string(), // Update compile_commands.json dir
+                "command": args.join(" "),
+                "file": src_path.to_string_lossy() // File points to original src for IDEs usually? IDEs prefer abs.
+            });
+            module_results.push((obj_path, entry));
+        }
+    }
+
     // Profiling Setup
     let trace_events = if enable_profile {
         Some(Arc::new(Mutex::new(Vec::new())))
@@ -710,6 +910,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     let pb = ProgressBar::new(source_files.len() as u64);
     pb.set_style(spinner_style);
     pb.set_message("Compiling...");
+
+    let use_modules = !module_results.is_empty();
 
     let results: Vec<(PathBuf, serde_json::Value)> = source_files
         .par_iter()
@@ -730,32 +932,47 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             }
             args.push(compiler.clone());
 
+            if use_modules && !is_msvc {
+                if (compiler.contains("gcc") || compiler.contains("g++"))
+                    && !compiler.contains("clang")
+                {
+                    args.push("-fmodules-ts".to_string());
+                } else if compiler.contains("clang") {
+                    args.push(format!("-fprebuilt-module-path={}", obj_dir.display()));
+                }
+            }
+
+            // Adjust paths for running inside .cx
+            let effective_src = Path::new("..").join(src_path);
+            let effective_obj = obj_path.strip_prefix(".cx").unwrap_or(&obj_path);
+
             if is_msvc {
                 // MSVC Flags
                 args.push("/nologo".to_string()); // Suppress copyright
                 args.push("/c".to_string());
                 args.push("/EHsc".to_string()); // Standard C++ exceptions
-                args.push(src_path.to_string_lossy().to_string());
-                args.push(format!("/Fo{}", obj_path.to_string_lossy()));
+                args.push(effective_src.to_string_lossy().to_string());
+                args.push(format!("/Fo{}", effective_obj.to_string_lossy()));
                 args.push(get_std_flag_msvc(&config.package.edition));
 
                 // Recursive Header Tracking for MSVC
                 // /sourceDependencies <file> available in VS 2019+
                 args.push("/sourceDependencies".to_string());
-                args.push(format!("{}.json", obj_path.display()));
+                args.push(format!("{}.json", effective_obj.display()));
             } else {
                 // GCC/Clang Flags
                 args.push("-fdiagnostics-color=always".to_string());
                 args.push("-c".to_string());
-                args.push(src_path.to_string_lossy().to_string());
+                args.push(effective_src.to_string_lossy().to_string());
                 args.push("-o".to_string());
-                args.push(obj_path.to_string_lossy().to_string());
+                args.push(effective_obj.to_string_lossy().to_string());
                 args.push(get_std_flag_gcc(&config.package.edition));
 
                 // Generate Dependency File
                 args.push("-MMD".to_string());
                 args.push("-MF".to_string());
-                args.push(obj_path.with_extension("d").to_string_lossy().to_string());
+                let d_path = PathBuf::from(effective_obj).with_extension("d");
+                args.push(d_path.to_string_lossy().to_string());
             }
 
             if release {
@@ -773,7 +990,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             }
 
             if let Some(build_cfg) = &config.build
-                && let Some(flags) = &build_cfg.cflags
+                && let Some(flags) = build_cfg.get_flags()
             {
                 for flag in flags {
                     // Translate MSVC-style flags for GCC/Clang
@@ -795,8 +1012,9 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             args.extend(pch_args.iter().cloned());
 
             // Prepare JSON entry for Intellisense
+            let cx_abs = current_dir.join(".cx");
             let entry = json!({
-                "directory": current_dir_str,
+                "directory": cx_abs.to_string_lossy().to_string(),
                 "command": args.join(" "),
                 "file": src_path.to_string_lossy()
             });
@@ -814,6 +1032,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 pb.set_message(format!("Compiling {}", stem));
                 let mut cmd = Command::new(&args[0]);
                 cmd.args(&args[1..]);
+                cmd.current_dir(".cx");
 
                 // Apply toolchain environment variables (INCLUDE, LIB, etc.)
                 if !toolchain_env.is_empty() {
@@ -921,8 +1140,14 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     }
 
     // Unzip results separate object files and JSON entries
-    let (object_files, json_entries): (Vec<PathBuf>, Vec<serde_json::Value>) =
+    let (mut object_files, mut json_entries): (Vec<PathBuf>, Vec<serde_json::Value>) =
         results.into_iter().unzip();
+
+    // Merge module results
+    for (obj, entry) in module_results {
+        object_files.push(obj);
+        json_entries.push(entry);
+    }
 
     // 6. Generate compile_commands.json in .cx/build/
     let json_str = serde_json::to_string_pretty(&json_entries)?;
@@ -1039,6 +1264,22 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             for search_path in &lib_search_paths {
                 cmd.arg(format!("-L{}", search_path.display()));
             }
+
+            // For GCC/MinGW on Windows, handle subsystem (console vs windows)
+            // Default to console to avoid "undefined reference to WinMain" errors
+            if is_windows {
+                let subsystem = config
+                    .build
+                    .as_ref()
+                    .and_then(|b| b.subsystem.as_ref())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_else(|| "console".to_string());
+
+                match subsystem.as_str() {
+                    "windows" => cmd.arg("-mwindows"),
+                    _ => cmd.arg("-mconsole"),
+                };
+            }
         }
 
         if let Some(build_cfg) = &config.build
@@ -1099,6 +1340,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             && let Err(e) = run_script(post, &current_dir)
         {
             println!("{} Post-build script failed: {}", "x".red(), e);
+            return Ok(false);
         }
 
         println!(
@@ -1160,17 +1402,136 @@ pub fn build_and_run(
                 }
                 // Override sources to build only this file, but keep everything else
                 if let Some(build_cfg) = &mut project_cfg.build {
-                    build_cfg.sources = Some(vec![final_path.to_string_lossy().to_string()]);
+                    let mut sources = vec![final_path.to_string_lossy().to_string()];
+
+                    // Universal Module Detection for Scripts
+                    if let Ok(content) = std::fs::read_to_string(&final_path) {
+                        // Simple regex-like scan for "import module_name;"
+                        // This handles single-line imports.
+                        for line in content.lines() {
+                            let line = line.trim();
+                            if line.starts_with("import ") && line.contains(';') {
+                                let until_semicolon = line.split(';').next().unwrap_or("").trim();
+                                let parts: Vec<&str> = until_semicolon.split_whitespace().collect();
+                                if parts.len() >= 2 {
+                                    // Extract module name
+                                    let mod_name = parts[1];
+
+                                    // Look for candidate module files
+                                    let candidates = vec![
+                                        format!("{}.cppm", mod_name),
+                                        format!("src/{}.cppm", mod_name),
+                                        format!("../src/{}.cppm", mod_name), // common for examples
+                                    ];
+
+                                    for cand in candidates {
+                                        let p = std::path::Path::new(&cand);
+                                        if p.exists() {
+                                            if verbose {
+                                                eprintln!(
+                                                    "{} Auto-resolving module '{}' -> {}",
+                                                    "📦".cyan(),
+                                                    mod_name,
+                                                    cand
+                                                );
+                                            }
+                                            // Add module file BEFORE the script (dependency order)
+                                            if !sources.contains(&cand) {
+                                                sources.insert(0, cand);
+                                            }
+
+                                            // Enable modules flag
+                                            // Modern Clang/GCC uses -std=c++20, no specific module flag needed usually
+                                            // or user provides it via cx.toml if needed.
+                                            break; // Found it
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    build_cfg.sources = Some(sources);
                     // Use file stem as binary name for script builds
                     build_cfg.bin = Some(file_stem.to_string());
+                    if verbose {
+                        eprintln!(
+                            "   {} Script sources set to: {:?}",
+                            "→".dimmed(),
+                            build_cfg.sources
+                        );
+                        eprintln!("   {} Script bin set to: {:?}", "→".dimmed(), build_cfg.bin);
+                    }
                 } else {
                     // No [build] section, create one with just sources
+                    let mut sources = vec![final_path.to_string_lossy().to_string()];
+
+                    // Universal Module Detection (Copy logic for no-build-section case)
+                    if let Ok(content) = std::fs::read_to_string(&final_path) {
+                        for line in content.lines() {
+                            let line = line.trim();
+                            if line.starts_with("import ") && line.contains(';') {
+                                let until_semicolon = line.split(';').next().unwrap_or("").trim();
+                                let parts: Vec<&str> = until_semicolon.split_whitespace().collect();
+                                if parts.len() >= 2 {
+                                    let mod_name = parts[1];
+                                    let candidates = vec![
+                                        format!("{}.cppm", mod_name),
+                                        format!("src/{}.cppm", mod_name),
+                                        format!("../src/{}.cppm", mod_name),
+                                    ];
+                                    for cand in candidates {
+                                        let p = std::path::Path::new(&cand);
+                                        if p.exists() {
+                                            if verbose {
+                                                eprintln!(
+                                                    "{} Auto-resolving module '{}' -> {}",
+                                                    "📦".cyan(),
+                                                    mod_name,
+                                                    cand
+                                                );
+                                            }
+                                            if !sources.contains(&cand) {
+                                                sources.insert(0, cand);
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let _has_modules = sources.iter().any(|s| s.ends_with(".cppm"));
+
                     project_cfg.build = Some(crate::config::BuildConfig {
-                        sources: Some(vec![final_path.to_string_lossy().to_string()]),
-                        bin: Some(file_stem.to_string()),
+                        sources: Some(sources),
+                        bin: {
+                            let mut b = file_stem.to_string();
+                            if cfg!(target_os = "windows") && !b.ends_with(".exe") {
+                                b.push_str(".exe");
+                            }
+                            Some(b)
+                        },
+                        flags: None,
                         ..Default::default()
                     });
                 }
+
+                // Fixup flags for second branch (no [build] section)
+                if let Some(build_cfg) = &mut project_cfg.build {
+                    // Check if we have .cppm files in sources
+                    if let Some(srcs) = &build_cfg.sources
+                        && srcs.iter().any(|s| s.ends_with(".cppm"))
+                    {
+                        let _flags = build_cfg.flags.get_or_insert_with(Vec::new);
+                        // Modern Clang modules - no legacy flag needed
+                        // if !flags.iter().any(|f| f.contains("-fmodules-ts")) {
+                        //    flags.push("-fmodules-ts".to_string());
+                        // }
+                    }
+                }
+
                 project_cfg
             }
             Err(_) => {
@@ -1286,7 +1647,7 @@ pub fn build_and_run(
 
     let success = build_project(&config, &options)?;
     if !success {
-        return Ok(());
+        std::process::exit(1);
     }
 
     // In dry-run mode, don't actually run
@@ -1303,7 +1664,10 @@ pub fn build_and_run(
         } else {
             bin_basename
         };
-        let bin_path = Path::new("build").join(profile).join(&bin_name);
+        let bin_path = Path::new("build") // For display only
+            .join(profile)
+            .join("bin")
+            .join(&bin_name);
 
         // If script mode and 'src/' lookup happened, path might be tricky for bin name logic?
         // Ephemeral config uses file stem as bin name, so it should be fine.
@@ -1334,7 +1698,7 @@ pub fn build_and_run(
         bin_basename
     };
 
-    let bin_path = Path::new(".cx").join("build").join(profile).join(bin_name);
+    let bin_path = Path::new(".cx").join(profile).join("bin").join(bin_name);
 
     if !bin_path.exists() {
         anyhow::bail!("Binary not found at {}", bin_path.display());
@@ -1351,9 +1715,8 @@ pub fn build_and_run(
     let status = run_cmd.status()?;
 
     if !status.success() {
-        // Don't error out, just return ok as we ran the program and it failed on its own terms
-        // unless we want to propagate exit code.
-        // Typically build tools separate build error vs run error.
+        // Propagate the exit code to the caller for CI/CD compatibility
+        std::process::exit(status.code().unwrap_or(1));
     }
 
     Ok(())

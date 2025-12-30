@@ -152,7 +152,11 @@ pub fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
             // Add or update default_target
             if content.contains("default_target") {
                 // Replace existing
-                let re = regex::Regex::new(r#"default_target\s*=\s*"[^"]*""#).unwrap();
+                let re = {
+                    use std::sync::OnceLock;
+                    static RE: OnceLock<regex::Regex> = OnceLock::new();
+                    RE.get_or_init(|| regex::Regex::new(r#"default_target\s*=\s*"[^"]*""#).unwrap())
+                };
                 content = re
                     .replace(&content, &format!("default_target = \"{}\"", name))
                     .to_string();

@@ -444,8 +444,11 @@ pub fn fetch_dependencies(
                 }
                 Err(e) => {
                     pb.finish_with_message(format!("{} Failed {}", "x".red(), name));
-                    println!("Error: {}", e);
-                    continue;
+                    return Err(anyhow::anyhow!(
+                        "Failed to clone dependency '{}': {}",
+                        name,
+                        e
+                    ));
                 }
             }
         } else {
@@ -456,7 +459,13 @@ pub fn fetch_dependencies(
             }
             match Repository::open(&lib_path) {
                 Ok(r) => r,
-                Err(_) => continue,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to open cached dependency '{}': {}",
+                        name,
+                        e
+                    ));
+                }
             }
         };
 

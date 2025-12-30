@@ -62,7 +62,11 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
     let name = if path.join("CMakeLists.txt").exists() {
         // Try to parse project(NAME)
         if let Ok(content) = fs::read_to_string(path.join("CMakeLists.txt")) {
-            let re = regex::Regex::new(r"project\s*\(\s*(\w+)").unwrap();
+            let re = {
+                use std::sync::OnceLock;
+                static RE: OnceLock<regex::Regex> = OnceLock::new();
+                RE.get_or_init(|| regex::Regex::new(r"project\s*\(\s*(\w+)").unwrap())
+            };
             if let Some(caps) = re.captures(&content) {
                 caps.get(1).map(|m| m.as_str().to_string())
             } else {
@@ -127,6 +131,10 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
             sources: None,
             pch: None,
             subsystem: None,
+            framework: None,
+            include: None,
+            build_type: None,
+            encoding: "utf-8".to_string(),
         }),
         dependencies: None, // Hard to guess deps
         scripts: None,

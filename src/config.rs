@@ -131,6 +131,17 @@ pub struct BuildConfig {
     pub pch: Option<String>,
     /// Windows subsystem (console or windows)
     pub subsystem: Option<String>,
+    /// Framework to use (e.g., "daxe", "arduino")
+    /// Automatically fetches and includes framework headers
+    pub framework: Option<String>,
+    /// Include paths for compilation
+    pub include: Option<Vec<String>>,
+    /// Build type (e.g., "header-only", "library", "executable")
+    #[serde(rename = "type")]
+    pub build_type: Option<String>,
+    /// Terminal encoding: "utf-8" (default) or "system"
+    #[serde(default = "default_encoding")]
+    pub encoding: String,
 }
 
 impl BuildConfig {
@@ -147,6 +158,10 @@ impl BuildConfig {
 
 fn default_edition() -> String {
     "c++23".to_string()
+}
+
+fn default_encoding() -> String {
+    "utf-8".to_string()
 }
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
@@ -181,6 +196,10 @@ pub fn create_ephemeral_config(
             sources: Some(vec![name.to_string()]),
             pch: None,
             subsystem: None,
+            framework: None,
+            include: None,
+            build_type: None,
+            encoding: default_encoding(),
         }),
         dependencies: None,
         scripts: None,
