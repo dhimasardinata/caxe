@@ -18,11 +18,29 @@ use std::path::Path;
 pub fn clean(cache: bool, all: bool, unused: bool) -> Result<()> {
     let mut cleaned = false;
 
-    // 1. Clean Build Directory (Default) - now in .cx/build
-    let cx_build = Path::new(".cx").join("build");
-    if cx_build.exists() {
-        fs::remove_dir_all(&cx_build).context("Failed to remove .cx/build directory")?;
+    // 1. Clean Build Directory (Default)
+    // Artifacts are stored in .cx/debug, .cx/release, and aux files in .cx/build
+    let cx_dir = Path::new(".cx");
+
+    if cx_dir.join("debug").exists() {
+        fs::remove_dir_all(cx_dir.join("debug")).context("Failed to remove .cx/debug directory")?;
         cleaned = true;
+    }
+
+    if cx_dir.join("release").exists() {
+        fs::remove_dir_all(cx_dir.join("release"))
+            .context("Failed to remove .cx/release directory")?;
+        cleaned = true;
+    }
+
+    if cx_dir.join("build").exists() {
+        fs::remove_dir_all(cx_dir.join("build")).context("Failed to remove .cx/build directory")?;
+        cleaned = true;
+    }
+
+    // Try to remove the parent .cx dir if empty
+    if cx_dir.exists() && cx_dir.read_dir()?.next().is_none() {
+        fs::remove_dir(cx_dir).ok();
     }
 
     // Also clean legacy build/ directory if it exists

@@ -50,7 +50,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     if let Some(deps) = &config.dependencies
         && !deps.is_empty()
     {
-        let (paths, cflags, libs) = crate::deps::fetch_dependencies(deps)?;
+        let (paths, cflags, libs, _modules) = crate::deps::fetch_dependencies(deps)?;
         include_paths = paths;
         extra_cflags = cflags;
         dep_libs = libs;

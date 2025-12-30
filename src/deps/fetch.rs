@@ -326,9 +326,12 @@ fn parse_github_url(url: &str) -> Option<(String, String)> {
     None
 }
 
+/// Module file info: (module_source_path, dependency_root_path)
+pub type ModuleFile = (PathBuf, PathBuf);
+
 pub fn fetch_dependencies(
     deps: &HashMap<String, Dependency>,
-) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>, Vec<ModuleFile>)> {
     let home_dir = dirs::home_dir().context("Could not find home directory")?;
     let cache_dir = home_dir.join(".cx").join("cache");
     fs::create_dir_all(&cache_dir)?;
@@ -338,6 +341,7 @@ pub fn fetch_dependencies(
     let mut include_paths = Vec::new(); // Pure paths for -I or /I
     let mut extra_cflags = Vec::new(); // pkg-config flags
     let mut link_flags = Vec::new();
+    let mut module_files: Vec<ModuleFile> = Vec::new(); // C++20 module files from deps
 
     if !deps.is_empty() {
         println!("{} Checking {} dependencies...", "📦".blue(), deps.len());
@@ -595,6 +599,21 @@ pub fn fetch_dependencies(
         include_paths.push(lib_path.join("dist"));
         include_paths.push(lib_path.join("dist").join("include"));
 
+        // F. Collect C++20 Module Files from dependency
+        let src_path = lib_path.join("src");
+        if src_path.exists() {
+            if let Ok(entries) = fs::read_dir(&src_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                        if ["cppm", "ixx", "mpp"].contains(&ext) {
+                            module_files.push((path, lib_path.clone()));
+                        }
+                    }
+                }
+            }
+        }
+
         // E. Smart Linking Logic (Zero Config Header-Only Support)
         if let Some(out_file) = output_file {
             // Support comma-separated output files
@@ -614,5 +633,5 @@ pub fn fetch_dependencies(
     }
 
     lockfile.save()?;
-    Ok((include_paths, extra_cflags, link_flags))
+    Ok((include_paths, extra_cflags, link_flags, module_files))
 }
