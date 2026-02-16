@@ -83,15 +83,12 @@ jobs:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_generate_github_workflow() -> Result<()> {
-        let temp_dir = std::env::temp_dir().join("caxe_test_ci");
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)?;
-        }
-        fs::create_dir_all(&temp_dir)?;
+        let temp_dir = tempdir()?;
+        assert!(temp_dir.path().exists());
 
         // temporarily change current dir to temp dir (careful with parallelism, but cargo test runs sequentially by default for this?)
         // Actually, changing current dir is global and risky in threads.

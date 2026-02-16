@@ -8,7 +8,6 @@
 [![Docs](https://img.shields.io/badge/docs-rustdoc-blue)](https://docs.rs/caxe)
 [![GitHub Sponsors](https://img.shields.io/badge/Sponsor-❤-pink?logo=github)](https://github.com/sponsors/dhimasardinata)
 
-
 **caxe** _(pronounced "c-axe")_ is a modern project manager for C and C++ designed to **cut through the complexity** of legacy build systems.
 
 It provides a unified workflow for scaffolding, building, testing, formatting, and managing dependencies—giving C/C++ developers the modern experience they deserve.
@@ -93,6 +92,7 @@ cx new my-game --template sdl3
 ## 📖 CLI Reference
 
 ### Project Management
+
 - **`cx new <name>`**: Create a new project.
 - **`cx init`**: Initialize `cx.toml` in an existing directory (imports CMake/Makefile projects!).
 - **`cx info`**: Show system, cache, and toolchain info.
@@ -100,6 +100,7 @@ cx new my-game --template sdl3
 - **`cx stats`**: Show project code metrics (LOC, files).
 
 ### Build & Run
+
 - **`cx run`**: Build and run the project.
 - **`cx build`**: Compile only.
   - `--release`: Optimize for speed (`-O3` / `/O2`).
@@ -114,11 +115,13 @@ cx new my-game --template sdl3
 - **`cx package`**: Create a distribution archive (ZIP) containing the executable, DLLs, and assets.
 
 ### Arduino/IoT
+
 - **`cx build --arduino`**: Build Arduino sketch (auto-detected if `.ino` files present).
 - **`cx upload -p COM3`**: Upload sketch to Arduino board.
 - **`cx new myproject --template arduino`**: Create Arduino project.
 
 ### Cross-Platform
+
 - **`cx target list`**: Show available cross-compilation presets and deferred-target status.
 - **`cx target add/remove/default`**: Visible but deferred in v0.3.x patch releases (non-zero with profile guidance).
 - **`cx build --profile <name>`**: Build using profile settings in `cx.toml`.
@@ -126,6 +129,7 @@ cx new my-game --template sdl3
 - **`cx generate ninja`**: Generate build.ninja from cx.toml.
 
 ### Dependencies
+
 - **`cx add <lib>`**: Add a library from registry or Git URL.
 - **`cx framework list`**: Show framework entries with support status (`integrated` vs `dependency-alias`).
 - **`cx framework add daxe`**: Configure integrated framework mode in `[build].framework`.
@@ -139,6 +143,7 @@ cx new my-game --template sdl3
 - **`cx tree`**: Visualize the dependency graph.
 
 ### Testing & Quality
+
 - **`cx test`**: Run unit tests in `tests/`.
   - `--filter <name>`: Run specific tests.
 - **`cx fmt`**: Format code with `clang-format`.
@@ -146,6 +151,7 @@ cx new my-game --template sdl3
 - **`cx check`**: Static analysis (clang-tidy/cppcheck).
 
 ### Ecosystem
+
 - **`cx toolchain`**: Manage C/C++ compilers.
   - `list`: Show detected compilers.
   - `select`: Choose active compiler interactively.
@@ -223,6 +229,7 @@ src/
 ```
 
 **Key Design Principles:**
+
 - **Zero-config**: Sensible defaults, automatic toolchain detection
 - **Progressive disclosure**: Simple commands → advanced options
 - **Parallel by default**: Lock-free compilation using rayon
@@ -242,6 +249,7 @@ cargo test --test integration_test
 ```
 
 **Test categories:**
+
 - `config.rs` - Config parsing, BuildConfig, Dependencies
 - `build/utils.rs` - MSVC/GCC standard flag generation
 - `build/feedback.rs` - Compiler error message parsing
@@ -283,31 +291,29 @@ If you find caxe useful, consider supporting its development:
 
 ### 🪙 Crypto Donations
 
-
 | Network | Address |
 |---------|---------|
 | **Ethereum/Polygon/BSC** | `0x7e1a1a8c46817f297be14c14b587a0fa4b9e484b` |
 | **Solana** | `Bek24ZEPWHUJeTHQmDHtC7uHaHiH7TX8FmfYqtQu3Tt` |
 | **Bitcoin** | `bc1q4rm4e007u0f44vje694f422dy423dfc2caqz9z` |
 
-
 Your sponsorship helps with:
+
 - 🔧 Continued development and new features
 - 📚 Better documentation and examples
 - 🐛 Faster bug fixes and support
 - 🌍 Community growth
 
-
 ## 📝 License
 
 Licensed under either of:
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 
 ---
 
-**Made with ❤️ for the C/C++ community**
+## Made with ❤️ for the C/C++ community
 

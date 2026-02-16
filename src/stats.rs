@@ -110,13 +110,12 @@ fn count_file_stats(path: &Path) -> Result<(usize, usize, usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_count_file_stats_simple() {
-        // Create a temp file with known content
-        let temp_dir = std::env::temp_dir().join("caxe_stats_test");
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let temp_file = temp_dir.join("test.cpp");
+        let temp_dir = tempdir().unwrap();
+        let temp_file = temp_dir.path().join("test.cpp");
 
         let content = r#"// Comment line
 int main() {
@@ -131,15 +130,12 @@ int main() {
         assert_eq!(code, 3);
         assert_eq!(blank, 1);
         assert_eq!(comment, 1);
-
-        std::fs::remove_file(&temp_file).ok();
     }
 
     #[test]
     fn test_count_file_stats_block_comment() {
-        let temp_dir = std::env::temp_dir().join("caxe_stats_test2");
-        std::fs::create_dir_all(&temp_dir).unwrap();
-        let temp_file = temp_dir.join("test2.cpp");
+        let temp_dir = tempdir().unwrap();
+        let temp_file = temp_dir.path().join("test2.cpp");
 
         let content = r#"/*
  * Block comment
@@ -151,7 +147,5 @@ int main() {}"#;
         assert_eq!(total, 4);
         assert_eq!(code, 1);
         assert_eq!(comment, 3);
-
-        std::fs::remove_file(&temp_file).ok();
     }
 }

@@ -99,14 +99,12 @@ int main() {
 }
 
 fn get_cx_binary() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    path.pop();
-    if cfg!(windows) {
-        path.join("cx.exe")
-    } else {
-        path.join("cx")
-    }
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+
+    let bin_name = if cfg!(windows) { "cx.exe" } else { "cx" };
+    target_dir.join("debug").join(bin_name)
 }
 
 #[test]

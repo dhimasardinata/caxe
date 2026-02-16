@@ -13,7 +13,7 @@
 If you discover a security vulnerability in caxe, please report it responsibly:
 
 1. **DO NOT** open a public GitHub issue for security vulnerabilities
-2. Email the maintainer directly at: dhimasardinatapp@gmail.com
+2. Email the maintainer directly at: <dhimasardinatapp@gmail.com>
 3. Include:
    - Description of the vulnerability
    - Steps to reproduce

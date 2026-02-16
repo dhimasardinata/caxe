@@ -7,9 +7,16 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn test_projects_root() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".tmp_test_projects")
+        .join("integration")
+}
+
 /// Create a temporary test project directory
 fn create_test_project(name: &str, is_cpp: bool) -> PathBuf {
-    let temp_dir = std::env::temp_dir().join("caxe_tests").join(name);
+    let temp_dir = test_projects_root().join(name);
 
     // Clean up if exists
     if temp_dir.exists() {
@@ -61,11 +68,12 @@ int main() {
 
 /// Get the path to the cx binary
 fn get_cx_binary() -> PathBuf {
-    // In tests, the binary is in target/debug/
-    let mut path = std::env::current_exe().expect("Failed to get current exe");
-    path.pop(); // Remove exe name
-    path.pop(); // Remove deps folder
-    path.join("cx.exe") // or "cx" on Unix
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"));
+
+    let bin_name = if cfg!(windows) { "cx.exe" } else { "cx" };
+    target_dir.join("debug").join(bin_name)
 }
 
 #[test]

@@ -24,7 +24,7 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainer at dhimasardinatapp@gmail.com.
+reported to the project maintainer at <dhimasardinatapp@gmail.com>.
 
 ## Attribution
 

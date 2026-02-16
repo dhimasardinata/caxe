@@ -42,6 +42,7 @@ winreg = "0.55"
 
 [dev-dependencies]
 criterion = "0.8"
+tempfile = "3"
 
 [[bench]]
 name = "main_benchmark"

@@ -814,14 +814,12 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
 mod tests {
     use super::*;
     use std::time::Duration;
+    use tempfile::tempdir;
 
     #[test]
     fn should_recompile_when_source_is_newer() {
-        let dir = std::env::temp_dir().join("caxe_test_should_recompile_src_newer");
-        if dir.exists() {
-            let _ = fs::remove_dir_all(&dir);
-        }
-        fs::create_dir_all(&dir).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let dir = temp_dir.path();
 
         let src = dir.join("test.cpp");
         let bin = dir.join("test.bin");
@@ -835,16 +833,12 @@ mod tests {
             &bin,
             SystemTime::UNIX_EPOCH
         ));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn should_recompile_when_global_input_is_newer() {
-        let dir = std::env::temp_dir().join("caxe_test_should_recompile_global_newer");
-        if dir.exists() {
-            let _ = fs::remove_dir_all(&dir);
-        }
-        fs::create_dir_all(&dir).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let dir = temp_dir.path();
 
         let src = dir.join("test.cpp");
         let bin = dir.join("test.bin");
@@ -855,7 +849,5 @@ mod tests {
             .checked_add(Duration::from_secs(2))
             .unwrap_or(SystemTime::now());
         assert!(should_recompile_test_binary(&src, &bin, future_global));
-
-        let _ = fs::remove_dir_all(&dir);
     }
 }

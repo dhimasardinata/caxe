@@ -9,7 +9,6 @@ echo "Installing caxe (cx)..."
 
 # 1. Detect OS & Arch
 OS="$(uname -s)"
-ARCH="$(uname -m)"
 
 case "$OS" in
     Linux)

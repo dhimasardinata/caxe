@@ -111,12 +111,12 @@ pub fn prune_unused(keep_deps: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_prune_keeps_listed_deps() {
-        // Create a temp cache directory
-        let temp_dir = std::env::temp_dir().join("caxe_cache_test");
-        let cache_dir = temp_dir.join(".cx").join("cache");
+        let temp_dir = tempdir().unwrap();
+        let cache_dir = temp_dir.path().join(".cx").join("cache");
         std::fs::create_dir_all(&cache_dir).ok();
 
         // Create fake dep directories
@@ -128,9 +128,6 @@ mod tests {
         assert!(cache_dir.join("raylib").exists());
         assert!(cache_dir.join("json").exists());
         assert!(cache_dir.join("unused_lib").exists());
-
-        // Cleanup
-        std::fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]

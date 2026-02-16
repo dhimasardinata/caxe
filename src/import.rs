@@ -164,20 +164,19 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use tempfile::tempdir;
 
     #[test]
     fn test_scan_cpp_project() -> Result<()> {
-        let temp_dir = std::env::temp_dir().join("caxe_test_import");
-        if temp_dir.exists() {
-            fs::remove_dir_all(&temp_dir)?;
-        }
-        fs::create_dir_all(temp_dir.join("src"))?;
+        let temp_dir = tempdir()?;
+        let project_dir = temp_dir.path().join("caxe_test_import");
+        fs::create_dir_all(project_dir.join("src"))?;
 
-        let main_cpp = temp_dir.join("src/main.cpp");
+        let main_cpp = project_dir.join("src/main.cpp");
         let mut f = fs::File::create(&main_cpp)?;
         writeln!(f, "int main() {{ return 0; }}")?;
 
-        let config = scan_project(&temp_dir)?.expect("Should detect project");
+        let config = scan_project(&project_dir)?.expect("Should detect project");
 
         assert_eq!(config.package.name, "caxe_test_import");
         assert_eq!(config.package.edition, "c++20");
@@ -195,9 +194,6 @@ mod tests {
                 || compiler.contains("gcc")
                 || compiler.contains("g++")
         );
-
-        // cleanup
-        fs::remove_dir_all(&temp_dir)?;
         Ok(())
     }
 }
