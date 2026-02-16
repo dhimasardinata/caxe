@@ -11,6 +11,28 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  lint:
+    name: Clippy (ubuntu-latest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Lint
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
   test:
     name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -37,4 +59,4 @@ jobs:
         run: cargo check --verbose
 
       - name: Run internal tests
-        run: cargo test --verbose
+        run: cargo test --all-targets --verbose

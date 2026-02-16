@@ -119,14 +119,17 @@ cx new my-game --template sdl3
 - **`cx new myproject --template arduino`**: Create Arduino project.
 
 ### Cross-Platform
-- **`cx target list`**: Show available cross-compilation presets.
-- **`cx target add/remove/default`**: Deferred command surface (use profiles instead).
+- **`cx target list`**: Show available cross-compilation presets and deferred-target status.
+- **`cx target add/remove/default`**: Visible but deferred in v0.3.x patch releases (non-zero with profile guidance).
 - **`cx build --profile <name>`**: Build using profile settings in `cx.toml`.
 - **`cx generate cmake`**: Generate CMakeLists.txt from cx.toml.
 - **`cx generate ninja`**: Generate build.ninja from cx.toml.
 
 ### Dependencies
 - **`cx add <lib>`**: Add a library from registry or Git URL.
+- **`cx framework list`**: Show framework entries with support status (`integrated` vs `dependency-alias`).
+- **`cx framework add daxe`**: Configure integrated framework mode in `[build].framework`.
+- **`cx framework add fmt/json/spdlog/catch2`**: Rejected by design; use **`cx add <name>`** instead.
 - **`cx remove <lib>`**: Remove a dependency.
 - **`cx update`**: Update dependencies to latest versions.
 - **`cx vendor`**: Copy all dependencies into `vendor/` for commit/offline use.

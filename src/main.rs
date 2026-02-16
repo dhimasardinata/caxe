@@ -226,7 +226,7 @@ enum Commands {
         #[command(subcommand)]
         op: Option<ToolchainOp>,
     },
-    /// Manage frameworks (daxe, fmt, json, etc.)
+    /// Manage frameworks (integrated + dependency-alias entries)
     Framework {
         #[command(subcommand)]
         op: Option<FrameworkOp>,
@@ -245,7 +245,7 @@ enum Commands {
     Tree,
     /// Show project statistics
     Stats,
-    /// Manage cross-compilation targets
+    /// Manage cross-compilation targets (mutation subcommands are deferred in v0.3.x)
     Target {
         #[command(subcommand)]
         op: Option<TargetOp>,
@@ -300,17 +300,17 @@ enum ToolchainOp {
 enum TargetOp {
     /// List all available targets
     List,
-    /// Add a target to the project
+    /// Add a target to the project (deferred in v0.3.x; use profiles)
     Add {
         /// Target name (windows-x64, linux-x64, macos-x64, wasm32, esp32)
         name: String,
     },
-    /// Remove a target from the project
+    /// Remove a target from the project (deferred in v0.3.x; use profiles)
     Remove {
         /// Target name
         name: String,
     },
-    /// Set the default target
+    /// Set the default target (deferred in v0.3.x; use profiles)
     Default {
         /// Target name
         name: String,
@@ -333,7 +333,7 @@ enum FrameworkOp {
     List,
     /// Interactively select a framework
     Select,
-    /// Add a specific framework to the project
+    /// Add a specific framework to the project (integrated entries only)
     Add {
         /// Framework name (daxe, fmt, json, catch2, spdlog)
         name: String,

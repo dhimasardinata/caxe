@@ -133,6 +133,27 @@ pub(crate) fn object_file_path_for_source(
     obj_dir.join(object_file_name_for_source(src_path, obj_ext))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FrameworkMode {
+    Integrated,
+    DependencyAlias,
+    ArduinoDedicated,
+    Unknown,
+}
+
+fn framework_mode(name: &str) -> FrameworkMode {
+    match name {
+        "daxe" => FrameworkMode::Integrated,
+        "fmt" | "spdlog" | "json" | "catch2" => FrameworkMode::DependencyAlias,
+        "arduino" => FrameworkMode::ArduinoDedicated,
+        _ => FrameworkMode::Unknown,
+    }
+}
+
+fn framework_alias_hint(name: &str) -> String {
+    format!("cx add {}", name.to_ascii_lowercase())
+}
+
 // --- Helper: Check Dependencies (.d file or .json for MSVC) ---
 fn check_dependencies(obj_path: &Path, src_path: &Path) -> Result<bool> {
     // 1. Check for MSVC JSON dependencies first
@@ -497,8 +518,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         && let Some(framework) = &build_cfg.framework
     {
         let framework_lower = framework.to_lowercase();
-        match framework_lower.as_str() {
-            "daxe" => {
+        match framework_mode(framework_lower.as_str()) {
+            FrameworkMode::Integrated => {
                 println!(
                     "   {} Using framework: {}",
                     "🪓".yellow(),
@@ -518,14 +539,26 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 dep_libs.extend(libs);
                 dep_modules.extend(modules);
             }
-            "arduino" => {
+            FrameworkMode::DependencyAlias => {
+                println!(
+                    "   {} Framework '{}' is a dependency-alias entry. Build continues without auto-integration.",
+                    "⚠".yellow(),
+                    framework
+                );
+                println!(
+                    "   {} Add it explicitly with {}",
+                    "→".dimmed(),
+                    framework_alias_hint(&framework_lower).cyan()
+                );
+            }
+            FrameworkMode::ArduinoDedicated => {
                 // Arduino mode is handled separately via config.arduino
                 println!(
                     "   {} Framework 'arduino' - use [arduino] section instead",
                     "ℹ".blue()
                 );
             }
-            _ => {
+            FrameworkMode::Unknown => {
                 println!("   {} Unknown framework: {}", "⚠".yellow(), framework);
             }
         }
@@ -2035,5 +2068,21 @@ mod tests {
             path.to_string_lossy().replace('\\', "/"),
             expected.to_string()
         );
+    }
+
+    #[test]
+    fn framework_mode_classifies_dependency_aliases() {
+        assert_eq!(framework_mode("daxe"), FrameworkMode::Integrated);
+        assert_eq!(framework_mode("fmt"), FrameworkMode::DependencyAlias);
+        assert_eq!(framework_mode("json"), FrameworkMode::DependencyAlias);
+        assert_eq!(framework_mode("catch2"), FrameworkMode::DependencyAlias);
+        assert_eq!(framework_mode("arduino"), FrameworkMode::ArduinoDedicated);
+        assert_eq!(framework_mode("unknown"), FrameworkMode::Unknown);
+    }
+
+    #[test]
+    fn framework_alias_hint_points_to_cx_add() {
+        assert_eq!(framework_alias_hint("fmt"), "cx add fmt");
+        assert_eq!(framework_alias_hint("JSON"), "cx add json");
     }
 }

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-02-16
+- Clarified framework support levels in `cx framework` with explicit statuses:
+  - `daxe`: `integrated`
+  - `fmt`, `spdlog`, `json`, `catch2`: `dependency-alias`
+- `cx framework add <name>` now rejects dependency-alias entries with non-zero exit and exact `cx add <name>` guidance
+- Improved framework info/list output with recommended commands per entry
+- Kept backward compatibility for existing `[build].framework` alias values:
+  - Build continues with warning
+  - Explicit migration hint to `cx add <name>` is shown
+- Replaced fragile framework config editing with section-aware `[build]` key mutation/removal logic
+- Kept `cx target add/remove/default` visible while marking them deferred in v0.3.x help and runtime output
+- Standardized deferred target mutation failures to non-zero with explicit profile-first guidance:
+  - configure `[profile:<name>]`
+  - run `cx build --profile <name>`
+- Improved `cx target list` UX with a clear deferred-status banner and profile-based setup hint
+- Added dedicated CI lint gate:
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+- Aligned CI test execution to explicit target coverage:
+  - `cargo test --all-targets --verbose`
+- Added targeted regression coverage for framework metadata/mutation behavior and target deferred messaging/help surface
+- Included dependency and workflow updates already present in `HEAD` (cargo deps + GitHub Actions deps bumps)
+
 ## [0.3.8] - Defects-First Stabilization & Governance 🛠️
 - Canonicalized artifact paths to `.cx/<profile>/bin` across build/package/IDE/docker flows
 - Updated `cx watch` non-test mode to rebuild-only behavior (no auto-run)
@@ -137,7 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/dhimasardinata/caxe/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/dhimasardinata/caxe/compare/v0.3.9...HEAD
+[0.3.9]: https://github.com/dhimasardinata/caxe/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/dhimasardinata/caxe/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/dhimasardinata/caxe/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/dhimasardinata/caxe/compare/v0.3.5...v0.3.6

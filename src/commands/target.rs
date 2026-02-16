@@ -6,6 +6,9 @@ use anyhow::{Result, anyhow};
 use colored::*;
 use std::path::Path;
 
+const TARGET_DEFERRED_REASON: &str =
+    "Target mutation commands are deferred in v0.3.x patch releases";
+
 /// Target subcommand operations
 #[derive(Clone, Debug)]
 pub enum TargetOp {
@@ -33,6 +36,19 @@ pub fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
             println!("{}", "─".repeat(50).dimmed());
             println!();
             println!(
+                "{} Target mutation commands ({}, {}, {}) are deferred in v0.3.x patch releases.",
+                "ℹ".blue(),
+                "add".yellow(),
+                "remove".yellow(),
+                "default".yellow()
+            );
+            println!(
+                "   Configure cross targets with {} and run {}.",
+                "[profile:<name>]".cyan(),
+                "cx build --profile <name>".cyan()
+            );
+            println!();
+            println!(
                 "   {} (MSVC) - Windows 64-bit",
                 "windows-x64".green().bold()
             );
@@ -55,76 +71,52 @@ pub fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
             if config_path.exists()
                 && let Ok(content) = std::fs::read_to_string(config_path)
             {
-                if content.contains("[targets]") || content.contains("targets =") {
-                    println!("{} Project targets configured", "✓".green());
+                if content.contains("[profile:") {
+                    println!(
+                        "{} Profile-based target configuration detected",
+                        "✓".green()
+                    );
                 } else {
                     println!(
-                        "{} No targets configured. Use {} to add one.",
+                        "{} No target profiles configured. Add {} and run {}.",
                         "!".yellow(),
-                        "cx target add <name>".cyan()
+                        "[profile:<name>]".cyan(),
+                        "cx build --profile <name>".cyan()
                     );
                 }
             }
             println!();
-            println!("Usage: {}", "cx target add <name>".cyan());
+            println!("Usage: {}", "cx target list".cyan());
+            println!(
+                "Deferred: {}, {}, {}",
+                "cx target add <name>".dimmed(),
+                "cx target remove <name>".dimmed(),
+                "cx target default <name>".dimmed()
+            );
             println!(
                 "Hint: configure cross builds with {} and run {}",
                 "[profile:<name>]".cyan(),
                 "cx build --profile <name>".cyan()
             );
         }
-        Some(TargetOp::Add { name }) => {
-            if !config_path.exists() {
-                println!(
-                    "{} No cx.toml found. Run {} first.",
-                    "x".red(),
-                    "cx init".cyan()
-                );
-                return Ok(());
-            }
-            eprintln!(
-                "{} '{}' is deferred. Configure targets via {} and run {}.",
-                "x".red(),
-                format!("cx target add {}", name).yellow(),
-                "[profile:<name>]".cyan(),
-                "cx build --profile <name>".cyan()
-            );
-            return Err(anyhow!(
-                "Target mutation commands are deferred in this release"
-            ));
-        }
-        Some(TargetOp::Remove { name }) => {
-            if !config_path.exists() {
-                println!("{} No cx.toml found.", "x".red());
-                return Ok(());
-            }
-            eprintln!(
-                "{} '{}' is deferred. Configure targets via {} and run {}.",
-                "x".red(),
-                format!("cx target remove {}", name).yellow(),
-                "[profile:<name>]".cyan(),
-                "cx build --profile <name>".cyan()
-            );
-            return Err(anyhow!(
-                "Target mutation commands are deferred in this release"
-            ));
-        }
-        Some(TargetOp::Default { name }) => {
-            if !config_path.exists() {
-                println!("{} No cx.toml found.", "x".red());
-                return Ok(());
-            }
-            eprintln!(
-                "{} '{}' is deferred. Configure targets via {} and run {}.",
-                "x".red(),
-                format!("cx target default {}", name).yellow(),
-                "[profile:<name>]".cyan(),
-                "cx build --profile <name>".cyan()
-            );
-            return Err(anyhow!(
-                "Target mutation commands are deferred in this release"
-            ));
-        }
+        Some(TargetOp::Add { name }) => return deferred_target_mutation("add", name),
+        Some(TargetOp::Remove { name }) => return deferred_target_mutation("remove", name),
+        Some(TargetOp::Default { name }) => return deferred_target_mutation("default", name),
     }
+
     Ok(())
+}
+
+fn deferred_target_mutation(operation: &str, target_name: &str) -> Result<()> {
+    eprintln!(
+        "{} '{}' is deferred in v0.3.x patch releases.",
+        "x".red(),
+        format!("cx target {operation} {target_name}").yellow()
+    );
+    eprintln!(
+        "  Configure targets via {} and run {}.",
+        "[profile:<name>]".cyan(),
+        "cx build --profile <name>".cyan()
+    );
+    Err(anyhow!(TARGET_DEFERRED_REASON))
 }

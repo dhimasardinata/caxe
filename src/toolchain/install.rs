@@ -840,9 +840,10 @@ fn install_espidf_info() -> Result<()> {
 
     println!();
     println!(
-        "   {} Use {} with ESP-IDF",
+        "   {} Configure {} and build with {} for ESP-IDF",
         "💡".cyan(),
-        "cx target add esp32".green()
+        "[profile:esp32]".green(),
+        "cx build --profile esp32".green()
     );
 
     Ok(())
