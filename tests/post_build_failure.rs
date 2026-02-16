@@ -7,8 +7,15 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn test_project_dir(name: &str) -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".tmp_test_projects")
+        .join(name)
+}
+
 fn create_project_with_failing_post_build(name: &str) -> PathBuf {
-    let temp_dir = std::env::temp_dir().join("caxe_tests").join(name);
+    let temp_dir = test_project_dir(name);
 
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir).ok();
@@ -50,7 +57,7 @@ int main() {
 }
 
 fn create_project_with_succeeding_post_build(name: &str) -> PathBuf {
-    let temp_dir = std::env::temp_dir().join("caxe_tests").join(name);
+    let temp_dir = test_project_dir(name);
 
     if temp_dir.exists() {
         fs::remove_dir_all(&temp_dir).ok();
