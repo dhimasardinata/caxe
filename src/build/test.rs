@@ -194,12 +194,16 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
         for entry in WalkDir::new(&obj_dir).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some(expected_obj_ext) {
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                let file_name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
                 // Exclude main object files and module objects based on exact deterministic names.
-                if main_obj_names.contains(file_name.as_ref()) {
+                if main_obj_names.contains(file_name.as_str()) {
                     continue;
                 }
-                if module_obj_names.contains(file_name.as_ref()) {
+                if module_obj_names.contains(file_name.as_str()) {
                     continue;
                 }
                 project_objs.push(path.to_path_buf());
@@ -363,7 +367,11 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
         let is_msvc = cpp_compiler.is_msvc;
 
         for mod_path in &module_files {
-            let stem = mod_path.file_stem().unwrap_or_default().to_string_lossy();
+            let stem = mod_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let obj_ext = if is_msvc { "obj" } else { "o" };
             let obj_path = super::core::object_file_path_for_source(&obj_dir, mod_path, obj_ext);
 
@@ -447,7 +455,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
 
                         // Relocate PCM if clang-cl output it to CWD ignoring /Fo
                         if is_clang_cl && !pcm_path.exists() {
-                            let cwd_pcm = Path::new(stem.as_ref()).with_extension("pcm");
+                            let cwd_pcm = Path::new(&stem).with_extension("pcm");
                             if cwd_pcm.exists() {
                                 fs::rename(&cwd_pcm, &pcm_path)?;
                             }
