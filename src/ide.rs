@@ -40,18 +40,10 @@ pub fn generate_ide_config() -> Result<()> {
         profiles: std::collections::HashMap::new(),
     });
 
-    let bin_name = if let Some(build) = &config.build {
-        build.bin.clone().unwrap_or(config.package.name.clone())
-    } else {
-        config.package.name.clone()
-    };
-
-    let bin_ext = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    let bin_path_debug = format!("${{workspaceFolder}}/build/debug/{}{}", bin_name, bin_ext);
+    let debug_bin_rel = crate::build::artifact_bin_path(&config, false, false)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let bin_path_debug = format!("${{workspaceFolder}}/{}", debug_bin_rel);
 
     // 1. tasks.json
     let tasks_json = json!({

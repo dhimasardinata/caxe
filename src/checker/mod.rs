@@ -244,7 +244,7 @@ pub fn check_code() -> Result<()> {
             cmd.arg(format!("-std={}", config.package.edition));
 
             if let Some(build_cfg) = &config.build
-                && let Some(flags) = &build_cfg.cflags
+                && let Some(flags) = build_cfg.get_flags()
             {
                 cmd.args(flags);
             }

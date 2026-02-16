@@ -27,7 +27,10 @@ pub mod utils;
 mod watcher;
 
 pub use clean::clean;
-pub use core::{BuildOptions, build_and_run, build_project};
+pub use core::{
+    BuildOptions, artifact_bin_dir, artifact_bin_path, artifact_profile_dir, artifact_profile_name,
+    binary_basename, binary_name, build_and_run, build_project,
+};
 pub use test::run_tests;
 pub use utils::load_config;
 pub use watcher::watch;

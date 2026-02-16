@@ -2,7 +2,7 @@
 //!
 //! Handles `cx target` subcommands for managing cross-compilation targets.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use colored::*;
 use std::path::Path;
 
@@ -66,10 +66,11 @@ pub fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
                 }
             }
             println!();
+            println!("Usage: {}", "cx target add <name>".cyan());
             println!(
-                "Usage: {} or {}",
-                "cx target add <name>".cyan(),
-                "cx build --target <name>".cyan()
+                "Hint: configure cross builds with {} and run {}",
+                "[profile:<name>]".cyan(),
+                "cx build --profile <name>".cyan()
             );
         }
         Some(TargetOp::Add { name }) => {
@@ -81,96 +82,48 @@ pub fn handle_target_command(op: &Option<TargetOp>) -> Result<()> {
                 );
                 return Ok(());
             }
-
-            let valid_targets = [
-                "windows-x64",
-                "windows-x64-gnu",
-                "linux-x64",
-                "linux-arm64",
-                "macos-x64",
-                "macos-arm64",
-                "wasm32",
-                "esp32",
-            ];
-
-            if !valid_targets.contains(&name.as_str()) {
-                println!(
-                    "{} Unknown target '{}'. Run {} to see available targets.",
-                    "x".red(),
-                    name,
-                    "cx target list".cyan()
-                );
-                return Ok(());
-            }
-
-            // Read and update config
-            let mut content = std::fs::read_to_string(config_path)?;
-
-            if content.contains(&format!("\"{}\"", name)) {
-                println!("{} Target '{}' already configured.", "!".yellow(), name);
-                return Ok(());
-            }
-
-            // Add targets section if not present
-            if !content.contains("[targets]") {
-                content.push_str(&format!("\n[targets]\nlist = [\"{}\"]\n", name));
-            } else {
-                // Append to existing targets list
-                content = content.replace("list = [", &format!("list = [\"{}\", ", name));
-            }
-
-            std::fs::write(config_path, content)?;
-            println!("{} Added target: {}", "✓".green(), name.cyan());
-            println!(
-                "   Build with: {}",
-                format!("cx build --target {}", name).yellow()
+            eprintln!(
+                "{} '{}' is deferred. Configure targets via {} and run {}.",
+                "x".red(),
+                format!("cx target add {}", name).yellow(),
+                "[profile:<name>]".cyan(),
+                "cx build --profile <name>".cyan()
             );
+            return Err(anyhow!(
+                "Target mutation commands are deferred in this release"
+            ));
         }
         Some(TargetOp::Remove { name }) => {
             if !config_path.exists() {
                 println!("{} No cx.toml found.", "x".red());
                 return Ok(());
             }
-
-            let content = std::fs::read_to_string(config_path)?;
-            let new_content = content
-                .replace(&format!("\"{}\", ", name), "")
-                .replace(&format!(", \"{}\"", name), "")
-                .replace(&format!("\"{}\"", name), "");
-
-            std::fs::write(config_path, new_content)?;
-            println!("{} Removed target: {}", "✓".green(), name);
+            eprintln!(
+                "{} '{}' is deferred. Configure targets via {} and run {}.",
+                "x".red(),
+                format!("cx target remove {}", name).yellow(),
+                "[profile:<name>]".cyan(),
+                "cx build --profile <name>".cyan()
+            );
+            return Err(anyhow!(
+                "Target mutation commands are deferred in this release"
+            ));
         }
         Some(TargetOp::Default { name }) => {
             if !config_path.exists() {
                 println!("{} No cx.toml found.", "x".red());
                 return Ok(());
             }
-
-            let mut content = std::fs::read_to_string(config_path)?;
-
-            // Add or update default_target
-            if content.contains("default_target") {
-                // Replace existing
-                let re = {
-                    use std::sync::OnceLock;
-                    static RE: OnceLock<regex::Regex> = OnceLock::new();
-                    RE.get_or_init(|| regex::Regex::new(r#"default_target\s*=\s*"[^"]*""#).unwrap())
-                };
-                content = re
-                    .replace(&content, &format!("default_target = \"{}\"", name))
-                    .to_string();
-            } else if content.contains("[targets]") {
-                content = content.replace(
-                    "[targets]",
-                    &format!("[targets]\ndefault_target = \"{}\"", name),
-                );
-            } else {
-                content.push_str(&format!("\n[targets]\ndefault_target = \"{}\"\n", name));
-            }
-
-            std::fs::write(config_path, content)?;
-            println!("{} Set default target: {}", "✓".green(), name.cyan());
+            eprintln!(
+                "{} '{}' is deferred. Configure targets via {} and run {}.",
+                "x".red(),
+                format!("cx target default {}", name).yellow(),
+                "[profile:<name>]".cyan(),
+                "cx build --profile <name>".cyan()
+            );
+            return Err(anyhow!(
+                "Target mutation commands are deferred in this release"
+            ));
         }
     }
     Ok(())

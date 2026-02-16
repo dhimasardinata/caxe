@@ -12,6 +12,7 @@
 use crate::ui;
 use anyhow::{Context, Result};
 use colored::*;
+use std::collections::HashSet;
 use std::fs;
 
 pub fn print_path() -> Result<()> {
@@ -81,12 +82,13 @@ pub fn prune_unused(keep_deps: &[String]) -> Result<()> {
     println!("{} Pruning unused packages...", "🧹".yellow());
     let entries = fs::read_dir(&cache_dir)?;
     let mut removed_count = 0;
+    let keep_set: HashSet<&str> = keep_deps.iter().map(String::as_str).collect();
 
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if !keep_deps.contains(&name) {
+            if !keep_set.contains(name.as_str()) {
                 println!("   {} Removing unused: {}", "🗑️".red(), name);
                 if let Err(e) = fs::remove_dir_all(&path) {
                     println!("     Error removing {}: {}", name, e);

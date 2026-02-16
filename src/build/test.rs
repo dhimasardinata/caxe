@@ -15,10 +15,109 @@ use anyhow::Result;
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 use walkdir::WalkDir;
+
+#[derive(Clone)]
+struct CompilerSpec {
+    command: String,
+    is_clang_cl: bool,
+    is_msvc: bool,
+}
+
+impl CompilerSpec {
+    fn detect(config: &CxConfig, has_cpp: bool) -> Self {
+        let command = get_compiler(config, has_cpp);
+        let is_clang_cl = command.contains("clang-cl");
+        let is_msvc = (command.contains("cl.exe") || command == "cl") && !is_clang_cl;
+        Self {
+            command,
+            is_clang_cl,
+            is_msvc,
+        }
+    }
+}
+
+fn collect_project_sources(config: &CxConfig) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut regular = Vec::new();
+    let mut modules = Vec::new();
+
+    if let Some(build_cfg) = &config.build
+        && let Some(explicit_sources) = &build_cfg.sources
+    {
+        for src in explicit_sources {
+            let path = PathBuf::from(src);
+            if !path.exists() {
+                continue;
+            }
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or_default();
+            if ["cppm", "ixx", "mpp"].contains(&ext) {
+                modules.push(path);
+            } else if ["cpp", "cc", "cxx", "c"].contains(&ext) {
+                regular.push(path);
+            }
+        }
+    } else {
+        let src_dir = Path::new("src");
+        if src_dir.exists() {
+            for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
+                let path = entry.path().to_path_buf();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or_default();
+                if ["cppm", "ixx", "mpp"].contains(&ext) {
+                    modules.push(path);
+                } else if ["cpp", "cc", "cxx", "c"].contains(&ext) {
+                    regular.push(path);
+                }
+            }
+        }
+    }
+
+    regular.sort();
+    regular.dedup();
+    modules.sort();
+    modules.dedup();
+
+    (regular, modules)
+}
+
+fn file_mtime_or_epoch(path: &Path) -> SystemTime {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn latest_mtime(paths: &[PathBuf]) -> SystemTime {
+    paths
+        .iter()
+        .map(|p| file_mtime_or_epoch(p))
+        .max()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+fn should_recompile_test_binary(
+    test_source: &Path,
+    output_binary: &Path,
+    global_input_mtime: SystemTime,
+) -> bool {
+    if !output_binary.exists() {
+        return true;
+    }
+
+    let src_mtime = file_mtime_or_epoch(test_source);
+    let bin_mtime = file_mtime_or_epoch(output_binary);
+
+    src_mtime > bin_mtime || global_input_mtime > bin_mtime
+}
 
 pub fn run_tests(filter: Option<String>) -> Result<()> {
     // Load config or default
@@ -60,7 +159,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     if let Some(f) = &filter {
         println!("   Filter: {}", f.cyan());
     }
-    let build_base = PathBuf::from(".cx/debug"); // TODO: Support release profile for tests
+    let build_base = super::core::artifact_profile_dir(false);
     let test_build_dir = build_base.join("tests");
     fs::create_dir_all(&test_build_dir)?;
 
@@ -71,52 +170,36 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
         .map(|tc| tc.env_vars.clone())
         .unwrap_or_default();
 
-    // Determine toolchain type for object file filtering
-    let compiler = get_compiler(&config, true);
-    let is_clang_cl = compiler.contains("clang-cl");
-    let is_msvc = (compiler.contains("cl.exe") || compiler == "cl") && !is_clang_cl;
-    let expected_obj_ext = if is_msvc { "obj" } else { "o" };
-
-    // Collect module files from src/ (Moved up so we can filter them out of project objs)
-    let mut module_files: Vec<PathBuf> = Vec::new();
-    let src_dir = Path::new("src");
-    if src_dir.exists() {
-        for entry in WalkDir::new(src_dir).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path().to_path_buf();
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if ["cppm", "ixx", "mpp"].contains(&ext) {
-                    module_files.push(path);
-                }
-            }
-        }
-    }
-    module_files.sort(); // Ensure deterministic order
+    // Detect compilers once (avoid repeated detection in parallel loop)
+    let cpp_compiler = CompilerSpec::detect(&config, true);
+    let c_compiler = CompilerSpec::detect(&config, false);
+    let expected_obj_ext = if cpp_compiler.is_msvc { "obj" } else { "o" };
+    let (project_sources, module_files) = collect_project_sources(&config);
 
     // Collect Project Object Files (excluding main and modules)
     // We assume the project was built in 'debug' mode for tests
-    let obj_dir = Path::new(".cx/debug/obj");
+    let obj_dir = build_base.join("obj");
     let mut project_objs = Vec::new();
-
-    // Helper to check if a path corresponds to a module object
-    let is_module_obj = |path: &Path| -> bool {
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        module_files.iter().any(|m| {
-            let stem = m.file_stem().unwrap_or_default().to_string_lossy();
-            file_name.starts_with(&*stem)
-        })
-    };
+    let module_obj_names: HashSet<String> = module_files
+        .iter()
+        .map(|src| super::core::object_file_name_for_source(src, expected_obj_ext))
+        .collect();
+    let main_obj_names: HashSet<String> = project_sources
+        .iter()
+        .filter(|src| src.file_stem().is_some_and(|stem| stem == "main"))
+        .map(|src| super::core::object_file_name_for_source(src, expected_obj_ext))
+        .collect();
 
     if obj_dir.exists() {
-        for entry in WalkDir::new(obj_dir).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(&obj_dir).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == expected_obj_ext) {
-                // Exclude main.o / main.obj
-                let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-                if stem == "main" {
+            if path.extension().and_then(|e| e.to_str()) == Some(expected_obj_ext) {
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                // Exclude main object files and module objects based on exact deterministic names.
+                if main_obj_names.contains(file_name.as_ref()) {
                     continue;
                 }
-                // Exclude module objects (they are added explicitly if needed)
-                if is_module_obj(path) {
+                if module_obj_names.contains(file_name.as_ref()) {
                     continue;
                 }
                 project_objs.push(path.to_path_buf());
@@ -167,11 +250,15 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     if single_binary {
         println!("{} Building single test runner...", "🔨".cyan());
         let test_name = config.package.name.clone(); // Use package name for the single test runner
-        let output_bin = format!(".cx/tests/{}", test_name); // Linux/Mac
+        let output_bin_path = if cfg!(target_os = "windows") {
+            test_build_dir.join(format!("{}.exe", test_name))
+        } else {
+            test_build_dir.join(&test_name)
+        };
+        let output_bin = output_bin_path.to_string_lossy().to_string();
 
-        let compiler = get_compiler(&config, true); // Assume C++ for tests generally
-        let is_clang_cl = compiler.contains("clang-cl");
-        let is_msvc = (compiler.contains("cl.exe") || compiler == "cl") && !is_clang_cl;
+        let compiler = cpp_compiler.command.clone(); // Assume C++ for tests generally
+        let is_msvc = cpp_compiler.is_msvc;
 
         let mut cmd = Command::new(&compiler);
         let mut args = Vec::new();
@@ -250,13 +337,7 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
 
         // Run It
         println!("{} Running tests...", "🚀".cyan());
-        let run_path = if cfg!(target_os = "windows") {
-            format!("{}.exe", output_bin)
-        } else {
-            format!("./{}", output_bin)
-        };
-
-        let mut run_cmd = Command::new(&run_path);
+        let mut run_cmd = Command::new(&output_bin_path);
         // Pass filter as argument if present (standard for Catch2/GTest/doctest)
         if let Some(f) = &filter {
             run_cmd.arg(f);
@@ -275,16 +356,16 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     let mut module_objs: Vec<PathBuf> = Vec::new();
     if !module_files.is_empty() {
         println!("{} Compiling project modules...", "📦".cyan());
-        fs::create_dir_all(&obj_dir)?;
+        fs::create_dir_all(obj_dir.as_path())?;
 
-        let compiler = get_compiler(&config, true);
-        let is_clang_cl = compiler.contains("clang-cl");
-        let is_msvc = (compiler.contains("cl.exe") || compiler == "cl") && !is_clang_cl;
+        let compiler = cpp_compiler.command.clone();
+        let is_clang_cl = cpp_compiler.is_clang_cl;
+        let is_msvc = cpp_compiler.is_msvc;
 
         for mod_path in &module_files {
             let stem = mod_path.file_stem().unwrap_or_default().to_string_lossy();
             let obj_ext = if is_msvc { "obj" } else { "o" };
-            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+            let obj_path = super::core::object_file_path_for_source(&obj_dir, mod_path, obj_ext);
 
             // Check if module needs recompilation
             let needs_compile = if !obj_path.exists() {
@@ -443,6 +524,19 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
             .progress_chars("●○·"),
     );
 
+    let mut global_input_paths = project_objs.clone();
+    global_input_paths.extend(module_objs.clone());
+    for lib in &dep_libs {
+        let lib_path = PathBuf::from(lib);
+        if lib_path.exists() {
+            global_input_paths.push(lib_path);
+        }
+    }
+    if Path::new("cx.toml").exists() {
+        global_input_paths.push(PathBuf::from("cx.toml"));
+    }
+    let global_input_mtime = latest_mtime(&global_input_paths);
+
     // Phase 1: Parallel Compilation
     let compiled_results: Vec<(String, Option<String>)> = test_files
         .par_iter()
@@ -452,30 +546,14 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let output_bin = if cfg!(target_os = "windows") {
-                format!(".cx/debug/tests/{}.exe", test_name)
+            let output_bin_path = if cfg!(target_os = "windows") {
+                test_build_dir.join(format!("{}.exe", test_name))
             } else {
-                format!(".cx/debug/tests/{}", test_name)
+                test_build_dir.join(&test_name)
             };
+            let output_bin = output_bin_path.to_string_lossy().to_string();
 
-            // Caching Check: Compare mtime of test source vs test binary
-            let bin_path = output_bin.clone();
-
-            let skip_compile = if Path::new(&bin_path).exists() {
-                let src_mtime = fs::metadata(path)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                let bin_mtime = fs::metadata(&bin_path)
-                    .and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                // If source is older than binary, we *might* skip.
-                // Ideally we also check project object mtimes, but let's keep it simple for now or check one level deep.
-                src_mtime < bin_mtime
-            } else {
-                false
-            };
-
-            if skip_compile {
+            if !should_recompile_test_binary(path, &output_bin_path, global_input_mtime) {
                 pb.inc(1); // Skip compile step
                 return (test_name, Some(output_bin));
             }
@@ -494,9 +572,14 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
 
             pb.set_message(format!("Compiling {}", test_name));
 
-            let compiler = get_compiler(&config, *is_cpp);
-            let is_clang_cl = compiler.contains("clang-cl");
-            let is_msvc = (compiler.contains("cl.exe") || compiler == "cl") && !is_clang_cl;
+            let compiler_spec = if *is_cpp {
+                cpp_compiler.clone()
+            } else {
+                c_compiler.clone()
+            };
+            let compiler = compiler_spec.command.clone();
+            let is_clang_cl = compiler_spec.is_clang_cl;
+            let is_msvc = compiler_spec.is_msvc;
             let mut cmd = Command::new(&compiler);
 
             if is_msvc {
@@ -717,4 +800,54 @@ pub fn run_tests(filter: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn should_recompile_when_source_is_newer() {
+        let dir = std::env::temp_dir().join("caxe_test_should_recompile_src_newer");
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("test.cpp");
+        let bin = dir.join("test.bin");
+        fs::write(&src, "int main(){}").unwrap();
+        fs::write(&bin, "bin").unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        fs::write(&src, "int main(){return 0;}").unwrap();
+
+        assert!(should_recompile_test_binary(
+            &src,
+            &bin,
+            SystemTime::UNIX_EPOCH
+        ));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn should_recompile_when_global_input_is_newer() {
+        let dir = std::env::temp_dir().join("caxe_test_should_recompile_global_newer");
+        if dir.exists() {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        fs::create_dir_all(&dir).unwrap();
+
+        let src = dir.join("test.cpp");
+        let bin = dir.join("test.bin");
+        fs::write(&src, "int main(){}").unwrap();
+        fs::write(&bin, "bin").unwrap();
+
+        let future_global = file_mtime_or_epoch(&bin)
+            .checked_add(Duration::from_secs(2))
+            .unwrap_or(SystemTime::now());
+        assert!(should_recompile_test_binary(&src, &bin, future_global));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

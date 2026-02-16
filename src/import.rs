@@ -111,6 +111,14 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
         cflags.push(format!("-I{}", inc));
     }
 
+    let mut source_list: Vec<String> = sources
+        .iter()
+        .filter_map(|src| src.strip_prefix(path).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .collect();
+    source_list.sort();
+    source_list.dedup();
+
     let config = CxConfig {
         package: PackageConfig {
             name,
@@ -128,7 +136,11 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
             cflags: None,
             libs: None, // Hard to guess libs from source
             ldflags: None,
-            sources: None,
+            sources: if source_list.is_empty() {
+                None
+            } else {
+                Some(source_list)
+            },
             pch: None,
             subsystem: None,
             framework: None,
@@ -171,6 +183,12 @@ mod tests {
         assert_eq!(config.package.edition, "c++20");
         let build_cfg = config.build.as_ref().unwrap();
         let compiler = build_cfg.compiler.as_ref().unwrap();
+        assert!(
+            build_cfg
+                .sources
+                .as_ref()
+                .is_some_and(|sources| sources.iter().any(|s| s == "src/main.cpp"))
+        );
         assert!(
             compiler.contains("msvc")
                 || compiler.contains("clang")

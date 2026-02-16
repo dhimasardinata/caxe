@@ -20,6 +20,7 @@ use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -49,6 +50,87 @@ pub struct BuildOptions {
     pub sanitize: Option<String>,
     /// Named profile for cross-compilation (e.g., "esp32", "linux-arm64")
     pub profile: Option<String>,
+}
+
+pub fn artifact_profile_name(release: bool) -> &'static str {
+    if release { "release" } else { "debug" }
+}
+
+pub fn artifact_profile_dir(release: bool) -> PathBuf {
+    PathBuf::from(".cx").join(artifact_profile_name(release))
+}
+
+pub fn artifact_bin_dir(release: bool) -> PathBuf {
+    artifact_profile_dir(release).join("bin")
+}
+
+pub fn binary_basename(config: &CxConfig) -> String {
+    if let Some(build_cfg) = &config.build {
+        build_cfg.bin.clone().unwrap_or(config.package.name.clone())
+    } else {
+        config.package.name.clone()
+    }
+}
+
+pub fn binary_name(config: &CxConfig, wasm: bool) -> String {
+    let base = binary_basename(config);
+    if wasm {
+        format!("{base}.html")
+    } else if cfg!(target_os = "windows") {
+        format!("{base}.exe")
+    } else {
+        base
+    }
+}
+
+pub fn artifact_bin_path(config: &CxConfig, release: bool, wasm: bool) -> PathBuf {
+    artifact_bin_dir(release).join(binary_name(config, wasm))
+}
+
+fn sanitize_filename_component(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn normalized_source_key(src_path: &Path) -> String {
+    src_path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_start_matches("./")
+        .to_string()
+}
+
+pub(crate) fn object_file_name_for_source(src_path: &Path, obj_ext: &str) -> String {
+    let stem = src_path
+        .file_stem()
+        .unwrap_or(src_path.as_os_str())
+        .to_string_lossy();
+    let stem = sanitize_filename_component(&stem);
+
+    let mut hasher = Sha256::new();
+    hasher.update(normalized_source_key(src_path).as_bytes());
+    let digest = hasher.finalize();
+    let short_hash = format!(
+        "{:02x}{:02x}{:02x}{:02x}",
+        digest[0], digest[1], digest[2], digest[3]
+    );
+
+    format!("{stem}-{short_hash}.{obj_ext}")
+}
+
+pub(crate) fn object_file_path_for_source(
+    obj_dir: &Path,
+    src_path: &Path,
+    obj_ext: &str,
+) -> PathBuf {
+    obj_dir.join(object_file_name_for_source(src_path, obj_ext))
 }
 
 // --- Helper: Check Dependencies (.d file or .json for MSVC) ---
@@ -254,6 +336,19 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     let config = &effective_config;
     let current_dir = std::env::current_dir()?;
 
+    if let Some(build_cfg) = &config.build
+        && let Some(build_type) = &build_cfg.build_type
+    {
+        let normalized = build_type.to_lowercase();
+        if normalized != "executable" {
+            eprintln!(
+                "   {} build.type = '{}' is not fully supported yet, defaulting to executable build",
+                "⚠".yellow(),
+                build_type
+            );
+        }
+    }
+
     // Dry-run or Verbose header with modern box styling
     let show_details = verbose || dry_run;
 
@@ -347,33 +442,14 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     }
 
     // 2. Setup Directories
-    let base_build_dir = PathBuf::from(".cx");
-    let build_dir = if release {
-        base_build_dir.join("release")
-    } else {
-        base_build_dir.join("debug")
-    };
+    let build_dir = artifact_profile_dir(release);
     let obj_dir = build_dir.join("obj");
-    let bin_dir = build_dir.join("bin");
+    let bin_dir = artifact_bin_dir(release);
 
     fs::create_dir_all(&obj_dir)?;
     fs::create_dir_all(&bin_dir)?;
 
-    let bin_basename = if let Some(build_cfg) = &config.build {
-        build_cfg.bin.clone().unwrap_or(config.package.name.clone())
-    } else {
-        config.package.name.clone()
-    };
-
-    let bin_name = if wasm {
-        format!("{}.html", bin_basename)
-    } else if cfg!(target_os = "windows") {
-        format!("{}.exe", bin_basename)
-    } else {
-        bin_basename
-    };
-
-    let output_bin = bin_dir.join(&bin_name);
+    let output_bin = artifact_bin_path(config, release, wasm);
 
     if verbose {
         println!("{}", "Paths:".bold());
@@ -669,12 +745,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     if dry_run {
         println!("{}", "Compile:".bold());
         for src_path in &source_files {
-            let stem = src_path
-                .file_stem()
-                .unwrap_or(src_path.as_os_str())
-                .to_string_lossy();
             let obj_ext = if is_msvc { "obj" } else { "o" };
-            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+            let obj_path = object_file_path_for_source(&obj_dir, src_path, obj_ext);
 
             // Shorter, cleaner format
             let short_compiler = Path::new(&compiler)
@@ -852,12 +924,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         println!("{} Compiling dependency modules...", "📦".cyan());
 
         for (mod_path, dep_root) in &dep_modules {
-            let stem = mod_path
-                .file_stem()
-                .unwrap_or(mod_path.as_os_str())
-                .to_string_lossy();
             let obj_ext = if is_msvc { "obj" } else { "o" };
-            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+            let obj_path = object_file_path_for_source(&obj_dir, mod_path, obj_ext);
 
             // Check if needs recompilation
             let needs_compile = if !obj_path.exists() {
@@ -977,12 +1045,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         println!("{} Compiling modules...", "📦".cyan());
 
         for src_path in &module_files {
-            let stem = src_path
-                .file_stem()
-                .unwrap_or(src_path.as_os_str())
-                .to_string_lossy();
             let obj_ext = if is_msvc { "obj" } else { "o" };
-            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+            let obj_path = object_file_path_for_source(&obj_dir, src_path, obj_ext);
 
             // Construct Arguments
             let mut args = Vec::new();
@@ -1114,7 +1178,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                 .unwrap_or(src_path.as_os_str())
                 .to_string_lossy();
             let obj_ext = if is_msvc { "obj" } else { "o" };
-            let obj_path = obj_dir.join(format!("{}.{}", stem, obj_ext));
+            let obj_path = object_file_path_for_source(&obj_dir, src_path, obj_ext);
 
             // Construct Arguments
             let mut args = Vec::new();
@@ -1125,10 +1189,8 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             }
             args.push(compiler.clone());
 
-            if use_modules && !is_msvc {
-                if compiler.contains("clang") {
-                    args.push(format!("-fprebuilt-module-path={}", obj_dir.display()));
-                }
+            if use_modules && !is_msvc && compiler.contains("clang") {
+                args.push(format!("-fprebuilt-module-path={}", obj_dir.display()));
             }
 
             // Adjust paths for running inside .cx
@@ -1377,15 +1439,13 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                     continue;
                 }
 
-                if lib_path.exists() {
-                    if let Ok(meta) = fs::metadata(lib_path) {
-                        if let Ok(mtime) = meta.modified() {
-                            if mtime > bin_time {
-                                needs_link = true;
-                                break;
-                            }
-                        }
-                    }
+                if lib_path.exists()
+                    && let Ok(meta) = fs::metadata(lib_path)
+                    && let Ok(mtime) = meta.modified()
+                    && mtime > bin_time
+                {
+                    needs_link = true;
+                    break;
                 }
             }
         }
@@ -1410,12 +1470,14 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             compiler.clone()
         };
         let use_clang_cl = effective_compiler == "clang-cl";
+        let is_msvc_like = is_msvc || use_clang_cl;
 
         let mut cmd = Command::new(&effective_compiler);
+        let mut msvc_linker_args: Vec<String> = Vec::new();
 
         // Link Flags for LTO
         if lto {
-            if is_msvc {
+            if is_msvc_like {
                 cmd.arg("/LTCG");
             } else {
                 cmd.arg("-flto");
@@ -1424,7 +1486,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
 
         // Link Flags for Sanitizers
         if let Some(checks) = &sanitize
-            && !is_msvc
+            && !is_msvc_like
         {
             cmd.arg(format!("-fsanitize={}", checks));
         }
@@ -1444,7 +1506,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
 
         if has_source_files {
             for path in &include_paths {
-                if is_msvc || use_clang_cl {
+                if is_msvc_like {
                     cmd.arg(format!("/I{}", path.display()));
                 } else {
                     cmd.arg(format!("-I{}", path.display()));
@@ -1453,7 +1515,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             cmd.args(&extra_cflags);
         }
 
-        if is_msvc || use_clang_cl {
+        if is_msvc_like {
             // Use to_string_lossy and quote the path to handle spaces and special chars
             let output_path = output_bin.to_string_lossy();
             cmd.arg(format!("/Fe:{}", output_path));
@@ -1482,7 +1544,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
         }
 
         // For GCC/Clang, add -L flags before the libs
-        if !is_msvc && !use_clang_cl {
+        if !is_msvc_like {
             for search_path in &lib_search_paths {
                 cmd.arg(format!("-L{}", search_path.display()));
             }
@@ -1508,7 +1570,7 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             && let Some(libs) = &build_cfg.libs
         {
             for lib in libs {
-                if is_msvc || use_clang_cl {
+                if is_msvc_like {
                     cmd.arg(format!("{}.lib", lib));
                 } else {
                     cmd.arg(format!("-l{}", lib));
@@ -1516,14 +1578,26 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
             }
         }
 
+        if let Some(build_cfg) = &config.build
+            && let Some(ldflags) = &build_cfg.ldflags
+        {
+            if is_msvc_like {
+                msvc_linker_args.extend(ldflags.iter().cloned());
+            } else {
+                cmd.args(ldflags);
+            }
+        }
+
         // For MSVC, pass /LIBPATH: flags via /link at the end
         // Also ensure dynamic CRT (/MD) for compatibility with prebuilt libs like GLFW
-        if (is_msvc || use_clang_cl) && !lib_search_paths.is_empty() {
-            cmd.arg("/MD"); // Use dynamic CRT to match prebuilt dependencies
-            cmd.arg("/link");
-            for search_path in &lib_search_paths {
-                cmd.arg(format!("/LIBPATH:{}", search_path.display()));
+        if is_msvc_like {
+            if !lib_search_paths.is_empty() {
+                cmd.arg("/MD"); // Use dynamic CRT to match prebuilt dependencies
+                for search_path in &lib_search_paths {
+                    msvc_linker_args.push(format!("/LIBPATH:{}", search_path.display()));
+                }
             }
+
             // Add subsystem flag if specified (e.g., for SDL2 with SDL2main.lib)
             if let Some(build_cfg) = &config.build
                 && let Some(subsystem) = &build_cfg.subsystem
@@ -1533,7 +1607,12 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
                     "console" => "/SUBSYSTEM:CONSOLE",
                     _ => "/SUBSYSTEM:CONSOLE",
                 };
-                cmd.arg(subsystem_flag);
+                msvc_linker_args.push(subsystem_flag.to_string());
+            }
+
+            if !msvc_linker_args.is_empty() {
+                cmd.arg("/link");
+                cmd.args(&msvc_linker_args);
             }
         }
 
@@ -1875,21 +1954,7 @@ pub fn build_and_run(
     // In dry-run mode, don't actually run
     if dry_run {
         println!("\n{}", "Run:".bold());
-        let profile = if release { "release" } else { "debug" };
-        let bin_basename = if let Some(build_cfg) = &config.build {
-            build_cfg.bin.clone().unwrap_or(config.package.name.clone())
-        } else {
-            config.package.name.clone()
-        };
-        let bin_name = if cfg!(target_os = "windows") {
-            format!("{}.exe", bin_basename)
-        } else {
-            bin_basename
-        };
-        let bin_path = Path::new("build") // For display only
-            .join(profile)
-            .join("bin")
-            .join(&bin_name);
+        let bin_path = artifact_bin_path(&config, release, false);
 
         // If script mode and 'src/' lookup happened, path might be tricky for bin name logic?
         // Ephemeral config uses file stem as bin name, so it should be fine.
@@ -1907,20 +1972,7 @@ pub fn build_and_run(
         return Ok(());
     }
 
-    let profile = if release { "release" } else { "debug" };
-    let bin_basename = if let Some(build_cfg) = &config.build {
-        build_cfg.bin.clone().unwrap_or(config.package.name.clone())
-    } else {
-        config.package.name.clone()
-    };
-
-    let bin_name = if cfg!(target_os = "windows") {
-        format!("{}.exe", bin_basename)
-    } else {
-        bin_basename
-    };
-
-    let bin_path = Path::new(".cx").join(profile).join("bin").join(bin_name);
+    let bin_path = artifact_bin_path(&config, release, false);
 
     if !bin_path.exists() {
         anyhow::bail!("Binary not found at {}", bin_path.display());
@@ -1942,4 +1994,46 @@ pub fn build_and_run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CxConfig, PackageConfig};
+
+    fn test_config(name: &str) -> CxConfig {
+        CxConfig {
+            package: PackageConfig {
+                name: name.to_string(),
+                version: "0.1.0".to_string(),
+                edition: "c++20".to_string(),
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn object_file_name_is_unique_for_same_stem_in_different_dirs() {
+        let ext = "o";
+        let a = Path::new("src/main.cpp");
+        let b = Path::new("examples/main.cpp");
+        let a_name = object_file_name_for_source(a, ext);
+        let b_name = object_file_name_for_source(b, ext);
+        assert_ne!(a_name, b_name);
+    }
+
+    #[test]
+    fn artifact_bin_path_uses_dot_cx_layout() {
+        let config = test_config("demo");
+        let path = artifact_bin_path(&config, false, false);
+        let expected = if cfg!(target_os = "windows") {
+            ".cx/debug/bin/demo.exe"
+        } else {
+            ".cx/debug/bin/demo"
+        };
+        assert_eq!(
+            path.to_string_lossy().replace('\\', "/"),
+            expected.to_string()
+        );
+    }
 }

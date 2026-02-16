@@ -16,9 +16,9 @@ use colored::*;
 use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, copy};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -223,9 +223,7 @@ fn try_download_prebuilt(
     let mut file = fs::File::create(&temp_zip)?;
     let body = response.into_body();
     let mut reader = body.into_reader();
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)?;
-    file.write_all(&buffer)?;
+    copy(&mut reader, &mut file)?;
     drop(file);
 
     // Extract zip
@@ -329,19 +327,40 @@ fn parse_github_url(url: &str) -> Option<(String, String)> {
 /// Module file info: (module_source_path, dependency_root_path)
 pub type ModuleFile = (PathBuf, PathBuf);
 
-pub fn fetch_dependencies(
+pub type FetchResult = (Vec<PathBuf>, Vec<String>, Vec<String>, Vec<ModuleFile>);
+
+#[derive(Clone, Copy, Debug)]
+pub struct FetchOptions {
+    pub enforce_lock: bool,
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        Self { enforce_lock: true }
+    }
+}
+
+pub fn fetch_dependencies(deps: &HashMap<String, Dependency>) -> Result<FetchResult> {
+    fetch_dependencies_with_options(deps, FetchOptions::default())
+}
+
+pub fn fetch_dependencies_with_options(
     deps: &HashMap<String, Dependency>,
-) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>, Vec<ModuleFile>)> {
+    options: FetchOptions,
+) -> Result<FetchResult> {
     let home_dir = dirs::home_dir().context("Could not find home directory")?;
     let cache_dir = home_dir.join(".cx").join("cache");
     fs::create_dir_all(&cache_dir)?;
 
     let mut lockfile = crate::lock::LockFile::load().unwrap_or_default();
+    let mut expected_git_deps: HashSet<String> = HashSet::new();
 
     let mut include_paths = Vec::new(); // Pure paths for -I or /I
+    let mut include_seen = HashSet::new();
     let mut extra_cflags = Vec::new(); // pkg-config flags
     let mut link_flags = Vec::new();
     let mut module_files: Vec<ModuleFile> = Vec::new(); // C++20 module files from deps
+    let mut module_seen: HashSet<PathBuf> = HashSet::new();
 
     if !deps.is_empty() {
         println!("{} Checking {} dependencies...", "📦".blue(), deps.len());
@@ -415,6 +434,7 @@ pub fn fetch_dependencies(
             ),
             _ => continue,
         };
+        expected_git_deps.insert(name.clone());
 
         // Check for local vendor override
         let vendor_path = std::env::current_dir()?.join("vendor").join(name);
@@ -479,7 +499,8 @@ pub fn fetch_dependencies(
 
         // Lockfile Check
         let mut locked_commit = None;
-        if let Some(lock_entry) = lockfile.get(name)
+        if options.enforce_lock
+            && let Some(lock_entry) = lockfile.get(name)
             && lock_entry.git == url
         {
             locked_commit = Some(lock_entry.rev.clone());
@@ -589,27 +610,33 @@ pub fn fetch_dependencies(
         }
 
         // D. Register Includes Flags (Return Paths)
-        include_paths.push(lib_path.clone());
-        include_paths.push(lib_path.join("include"));
-        include_paths.push(lib_path.join("src"));
+        let mut push_include = |candidate: PathBuf| {
+            if candidate.exists() && include_seen.insert(candidate.clone()) {
+                include_paths.push(candidate);
+            }
+        };
+        push_include(lib_path.clone());
+        push_include(lib_path.join("include"));
+        push_include(lib_path.join("src"));
         // CMake-built dependencies often generate headers in the build directory
-        include_paths.push(lib_path.join("build").join("include"));
-        include_paths.push(lib_path.join("build").join("include").join("SDL2"));
+        push_include(lib_path.join("build").join("include"));
+        push_include(lib_path.join("build").join("include").join("SDL2"));
         // GLAD 2.0 outputs to dist/ directory
-        include_paths.push(lib_path.join("dist"));
-        include_paths.push(lib_path.join("dist").join("include"));
+        push_include(lib_path.join("dist"));
+        push_include(lib_path.join("dist").join("include"));
 
         // F. Collect C++20 Module Files from dependency
         let src_path = lib_path.join("src");
-        if src_path.exists() {
-            if let Ok(entries) = fs::read_dir(&src_path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                        if ["cppm", "ixx", "mpp"].contains(&ext) {
-                            module_files.push((path, lib_path.clone()));
-                        }
-                    }
+        if src_path.exists()
+            && let Ok(entries) = fs::read_dir(&src_path)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension().and_then(|e| e.to_str())
+                    && ["cppm", "ixx", "mpp"].contains(&ext)
+                    && module_seen.insert(path.clone())
+                {
+                    module_files.push((path, lib_path.clone()));
                 }
             }
         }
@@ -632,6 +659,9 @@ pub fn fetch_dependencies(
         }
     }
 
+    lockfile
+        .packages
+        .retain(|name, _| expected_git_deps.contains(name));
     lockfile.save()?;
     Ok((include_paths, extra_cflags, link_flags, module_files))
 }
