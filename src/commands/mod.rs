@@ -4,6 +4,7 @@
 //! extracted from main.rs for better organization.
 
 pub mod doctor;
+pub mod framework;
 pub mod generate;
 pub mod target;
 pub mod toolchain;

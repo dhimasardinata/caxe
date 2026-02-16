@@ -198,7 +198,7 @@ pub fn check_code() -> Result<()> {
     let mut include_flags = Vec::new();
     if let Some(deps) = &config.dependencies
         && !deps.is_empty()
-        && let Ok((paths, cflags, _)) = deps::fetch_dependencies(deps)
+        && let Ok((paths, cflags, _, _)) = deps::fetch_dependencies(deps)
     {
         for p in paths {
             include_flags.push(format!("-I{}", p.display()));
@@ -244,7 +244,7 @@ pub fn check_code() -> Result<()> {
             cmd.arg(format!("-std={}", config.package.edition));
 
             if let Some(build_cfg) = &config.build
-                && let Some(flags) = &build_cfg.cflags
+                && let Some(flags) = build_cfg.get_flags()
             {
                 cmd.args(flags);
             }

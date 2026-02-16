@@ -5,7 +5,6 @@ use caxe::registry;
 use caxe::templates;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use toml;
 
 const MOCK_CONFIG: &str = r#"
 [package]
@@ -58,7 +57,7 @@ fn bench_scan_project(c: &mut Criterion) {
     // Setup a temp dir for scanning
     let temp_dir = std::env::temp_dir().join("caxe_bench_scan");
     if !temp_dir.exists() {
-        std::fs::create_dir_all(&temp_dir.join("src")).unwrap();
+        std::fs::create_dir_all(temp_dir.join("src")).unwrap();
         std::fs::write(temp_dir.join("src/main.cpp"), "int main() { return 0; }").unwrap();
     }
 

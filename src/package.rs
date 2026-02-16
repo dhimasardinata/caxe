@@ -13,8 +13,8 @@ use crate::build;
 use anyhow::Result;
 use colored::*;
 use std::fs::File;
-use std::io::{Read, Write};
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use zip::write::FileOptions;
 
@@ -47,20 +47,9 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
     // 2. Determine Output Paths
     let project_name = config.package.name.clone();
     let version = config.package.version.clone();
-
-    let build_dir = if release {
-        Path::new("build").join("release")
-    } else {
-        Path::new("build").join("debug")
-    };
-
-    let binary_name = if cfg!(windows) {
-        format!("{}.exe", project_name)
-    } else {
-        project_name.clone()
-    };
-
-    let binary_path = build_dir.join(&binary_name);
+    let binary_name = build::binary_name(&config, false);
+    let binary_path = build::artifact_bin_path(&config, release, false);
+    let bin_dir = build::artifact_bin_dir(release);
 
     if !binary_path.exists() {
         return Err(anyhow::anyhow!(
@@ -70,10 +59,10 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
     }
 
     // Determine config output name
-    let zip_filename = output_name.unwrap_or_else(|| format!("{}-v{}.zip", project_name, version));
-
-    // Output inside build directory to keep root clean
-    let zip_path = Path::new("build").join(&zip_filename);
+    let zip_filename = format!("{}-v{}.zip", project_name, version);
+    let zip_path = output_name
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(zip_filename));
 
     println!("{} Creating archive: {}", "💾".blue(), zip_path.display());
 
@@ -87,12 +76,10 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
     println!("   {} Adding executable: {}", "+".green(), binary_name);
     zip.start_file(&binary_name, options)?;
     let mut f = File::open(&binary_path)?;
-    let mut buffer = Vec::new();
-    f.read_to_end(&mut buffer)?;
-    zip.write_all(&buffer)?;
+    io::copy(&mut f, &mut zip)?;
 
     // 4. Add Assets (if exist)
-    if Path::new("assets").exists() {
+    if std::path::Path::new("assets").exists() {
         println!("   {} Adding assets...", "+".green());
         let walk = WalkDir::new("assets");
         for entry in walk {
@@ -121,9 +108,7 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
 
             zip.start_file(name, options)?;
             let mut f = File::open(path)?;
-            let mut buffer = Vec::new();
-            f.read_to_end(&mut buffer)?;
-            zip.write_all(&buffer)?;
+            io::copy(&mut f, &mut zip)?;
         }
     }
 
@@ -134,7 +119,7 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
     // Or just skip for MVP.
     // Let's scan the `build_dir` for any OTHER .dll files and include them.
     if cfg!(windows)
-        && let Ok(entries) = std::fs::read_dir(&build_dir)
+        && let Ok(entries) = std::fs::read_dir(&bin_dir)
     {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -146,9 +131,7 @@ pub fn package_project(output_name: Option<String>, release: bool) -> Result<()>
                 println!("   {} Adding library: {}", "+".green(), name);
                 zip.start_file(name, options)?;
                 let mut f = File::open(&path)?;
-                let mut buffer = Vec::new();
-                f.read_to_end(&mut buffer)?;
-                zip.write_all(&buffer)?;
+                io::copy(&mut f, &mut zip)?;
             }
         }
     }

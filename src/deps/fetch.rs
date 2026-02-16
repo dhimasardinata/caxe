@@ -16,9 +16,9 @@ use colored::*;
 use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Read, copy};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -223,9 +223,7 @@ fn try_download_prebuilt(
     let mut file = fs::File::create(&temp_zip)?;
     let body = response.into_body();
     let mut reader = body.into_reader();
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer)?;
-    file.write_all(&buffer)?;
+    copy(&mut reader, &mut file)?;
     drop(file);
 
     // Extract zip
@@ -326,284 +324,436 @@ fn parse_github_url(url: &str) -> Option<(String, String)> {
     None
 }
 
-pub fn fetch_dependencies(
+/// Module file info: (module_source_path, dependency_root_path)
+pub type ModuleFile = (PathBuf, PathBuf);
+
+pub type FetchResult = (Vec<PathBuf>, Vec<String>, Vec<String>, Vec<ModuleFile>);
+
+#[derive(Clone, Copy, Debug)]
+pub struct FetchOptions {
+    pub enforce_lock: bool,
+}
+
+impl Default for FetchOptions {
+    fn default() -> Self {
+        Self { enforce_lock: true }
+    }
+}
+
+pub fn fetch_dependencies(deps: &HashMap<String, Dependency>) -> Result<FetchResult> {
+    fetch_dependencies_with_options(deps, FetchOptions::default())
+}
+
+pub fn fetch_dependencies_with_options(
     deps: &HashMap<String, Dependency>,
-) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+    options: FetchOptions,
+) -> Result<FetchResult> {
     let home_dir = dirs::home_dir().context("Could not find home directory")?;
     let cache_dir = home_dir.join(".cx").join("cache");
     fs::create_dir_all(&cache_dir)?;
 
     let mut lockfile = crate::lock::LockFile::load().unwrap_or_default();
-
-    let mut include_paths = Vec::new(); // Pure paths for -I or /I
-    let mut extra_cflags = Vec::new(); // pkg-config flags
-    let mut link_flags = Vec::new();
+    let mut state = FetchState::default();
 
     if !deps.is_empty() {
         println!("{} Checking {} dependencies...", "📦".blue(), deps.len());
     }
 
     for (name, dep_data) in deps {
-        // --- CASE 1: System Package (pkg-config) ---
-        if let Dependency::Complex {
-            pkg: Some(pkg_name),
-            ..
-        } = dep_data
-        {
-            println!("   {} Resolving system pkg: {}", "🔎".cyan(), pkg_name);
-
-            // 1. Get CFLAGS (Include paths)
-            match Command::new("pkg-config")
-                .args(["--cflags", pkg_name])
-                .output()
-            {
-                Ok(out) => {
-                    let out_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    if !out_str.is_empty() {
-                        for flag in out_str.split_whitespace() {
-                            extra_cflags.push(flag.to_string());
-                        }
-                    }
-                }
-                Err(_) => println!("{} Warning: pkg-config tool not found", "!".yellow()),
-            }
-
-            // 2. Get LIBS (Link paths)
-            if let Ok(out) = Command::new("pkg-config")
-                .args(["--libs", pkg_name])
-                .output()
-            {
-                if !out.status.success() {
-                    println!(
-                        "{} Package '{}' not found via pkg-config",
-                        "x".red(),
-                        pkg_name
-                    );
-                }
-                let out_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !out_str.is_empty() {
-                    for flag in out_str.split_whitespace() {
-                        link_flags.push(flag.to_string());
-                    }
-                }
-            }
+        if let Some(pkg_name) = pkg_dependency_name(dep_data) {
+            resolve_system_package(pkg_name, &mut state);
             continue;
         }
 
-        // --- CASE 2: Git Dependency ---
-        let (url, build_script, output_file, tag, branch, rev) = match dep_data {
-            Dependency::Simple(u) => (u.clone(), None, None, None, None, None),
-            Dependency::Complex {
-                git: Some(u),
-                build,
-                output,
-                tag,
-                branch,
-                rev,
-                ..
-            } => (
-                u.clone(),
-                build.clone(),
-                output.clone(),
-                tag.clone(),
-                branch.clone(),
-                rev.clone(),
-            ),
-            _ => continue,
+        let Some(spec) = extract_git_dependency_spec(dep_data) else {
+            continue;
         };
+        process_git_dependency(name, &spec, &cache_dir, options, &mut lockfile, &mut state)?;
+    }
 
-        // Check for local vendor override
-        let vendor_path = std::env::current_dir()?.join("vendor").join(name);
+    lockfile
+        .packages
+        .retain(|name, _| state.expected_git_deps.contains(name));
+    lockfile.save()?;
+    Ok(state.into_result())
+}
 
-        let (lib_path, is_vendor) = if vendor_path.exists() {
-            (vendor_path, true)
-        } else {
-            (cache_dir.join(name), false)
-        };
+#[derive(Default)]
+struct FetchState {
+    expected_git_deps: HashSet<String>,
+    include_paths: Vec<PathBuf>,
+    include_seen: HashSet<PathBuf>,
+    extra_cflags: Vec<String>,
+    link_flags: Vec<String>,
+    module_files: Vec<ModuleFile>,
+    module_seen: HashSet<PathBuf>,
+}
 
-        // A. Download (Clone) or Open Existing
-        let repo = if !lib_path.exists() {
-            // Cannot download if we expected vendor but it's missing (should have fallen back to cache)
-            // Logic: If vendor exists, use it. If not, use cache.
-            // If cache missing, download to cache.
-
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(
-                ProgressStyle::default_spinner()
-                    .template("{spinner:.blue} {msg}")
-                    .unwrap_or_else(|_| ProgressStyle::default_spinner())
-                    .tick_chars("⣾⣽⣻⢿⡿⣟⣯⣷"),
-            );
-            pb.set_message(format!("Downloading {}...", name));
-            pb.enable_steady_tick(std::time::Duration::from_millis(100));
-
-            match Repository::clone(&url, &lib_path) {
-                Ok(r) => {
-                    pb.finish_with_message(format!("{} Downloaded {}", "✓".green(), name));
-                    r
-                }
-                Err(e) => {
-                    pb.finish_with_message(format!("{} Failed {}", "x".red(), name));
-                    println!("Error: {}", e);
-                    continue;
-                }
-            }
-        } else {
-            if is_vendor {
-                println!("   {} Using vendor: {}", "📦".blue(), name);
-            } else {
-                println!("   {} Using cached: {}", "⚡".green(), name);
-            }
-            match Repository::open(&lib_path) {
-                Ok(r) => r,
-                Err(_) => continue,
-            }
-        };
-
-        // B. Pinning / Checkout Logic (v0.1.5 + v0.1.8 Lockfile)
-        let mut obj_to_checkout = None;
-        let mut checkout_msg = String::new();
-
-        // Lockfile Check
-        let mut locked_commit = None;
-        if let Some(lock_entry) = lockfile.get(name)
-            && lock_entry.git == url
-        {
-            locked_commit = Some(lock_entry.rev.clone());
-        }
-
-        if let Some(r) = rev {
-            // 1. Explicit Config Commit (Highest Priority)
-            if let Ok(oid) = git2::Oid::from_str(&r)
-                && let Ok(obj) = repo.find_object(oid, None)
-            {
-                obj_to_checkout = Some(obj);
-                checkout_msg = format!("commit {}", &r[..7]);
-            }
-        } else if let Some(ref t) = tag {
-            // 2. Explicit Tag
-            let refname = format!("refs/tags/{}", t);
-            if let Ok(r_ref) = repo.find_reference(&refname)
-                && let Ok(obj) = r_ref.peel_to_commit()
-            {
-                obj_to_checkout = Some(obj.into_object());
-                checkout_msg = format!("tag {}", t);
-            }
-        } else if let Some(b) = branch {
-            // 3. Explicit Branch
-            if let Ok(r_ref) = repo.find_branch(&b, git2::BranchType::Local) {
-                if let Ok(obj) = r_ref.get().peel_to_commit() {
-                    obj_to_checkout = Some(obj.into_object());
-                    checkout_msg = format!("branch {}", b);
-                }
-            } else {
-                let remote_ref = format!("origin/{}", b);
-                if let Ok(r_ref) = repo.find_branch(&remote_ref, git2::BranchType::Remote)
-                    && let Ok(obj) = r_ref.get().peel_to_commit()
-                {
-                    obj_to_checkout = Some(obj.into_object());
-                    checkout_msg = format!("branch {}", b);
-                }
-            }
-        } else if let Some(rev) = locked_commit {
-            // 4. Lockfile Commit (Zero Config Reproducibility)
-            if let Ok(oid) = git2::Oid::from_str(&rev)
-                && let Ok(obj) = repo.find_object(oid, None)
-            {
-                obj_to_checkout = Some(obj);
-                checkout_msg = format!("locked {}", &rev[..7]);
-            }
-        }
-
-        if let Some(obj) = obj_to_checkout {
-            repo.set_head_detached(obj.id())?;
-            let mut checkout_opts = git2::build::CheckoutBuilder::new();
-            checkout_opts.force();
-            repo.checkout_tree(&obj, Some(&mut checkout_opts))
-                .context(format!("Failed to checkout {}", checkout_msg))?;
-            println!("   {} Locked to {}", "📌".blue(), checkout_msg);
-        }
-
-        // Update Lockfile with current HEAD
-        if let Ok(head) = repo.head()
-            && let Ok(target) = head.peel_to_commit()
-        {
-            let current_hash = target.id().to_string();
-            lockfile.insert(name.clone(), url.clone(), current_hash);
-        }
-
-        // C. Try Prebuilt Binary (Skip slow source build!)
-        let tag_ref = tag.as_deref();
-        let out_filename = output_file.as_deref().unwrap_or("");
-
-        // Try prebuilt first (for known libraries like GLFW, SDL2)
-        let prebuilt_success = if !out_filename.is_empty() {
-            try_download_prebuilt(name, &url, tag_ref, &lib_path, out_filename).unwrap_or(false)
-        } else {
-            false
-        };
-
-        // D. Build Custom Script (If prebuilt failed and script exists)
-        if !prebuilt_success && let Some(cmd_str) = build_script {
-            let should_build = if !out_filename.is_empty() {
-                !lib_path.join(out_filename).exists()
-            } else {
-                true
-            };
-
-            if should_build {
-                println!("   {} Building {}...", "🔨".yellow(), name);
-                let status = if cfg!(target_os = "windows") {
-                    Command::new("cmd")
-                        .args(["/C", &cmd_str])
-                        .current_dir(&lib_path)
-                        .status()
-                } else {
-                    Command::new("sh")
-                        .args(["-c", &cmd_str])
-                        .current_dir(&lib_path)
-                        .status()
-                };
-
-                match status {
-                    Ok(s) if s.success() => {}
-                    _ => {
-                        println!("{} Build script failed for {}", "x".red(), name);
-                        continue;
-                    }
-                }
-            }
-        }
-
-        // D. Register Includes Flags (Return Paths)
-        include_paths.push(lib_path.clone());
-        include_paths.push(lib_path.join("include"));
-        include_paths.push(lib_path.join("src"));
-        // CMake-built dependencies often generate headers in the build directory
-        include_paths.push(lib_path.join("build").join("include"));
-        include_paths.push(lib_path.join("build").join("include").join("SDL2"));
-        // GLAD 2.0 outputs to dist/ directory
-        include_paths.push(lib_path.join("dist"));
-        include_paths.push(lib_path.join("dist").join("include"));
-
-        // E. Smart Linking Logic (Zero Config Header-Only Support)
-        if let Some(out_file) = output_file {
-            // Support comma-separated output files
-            for single_output in out_file.split(',').map(|s| s.trim()) {
-                let full_lib_path = lib_path.join(single_output);
-                if full_lib_path.exists() {
-                    link_flags.push(full_lib_path.to_string_lossy().to_string());
-                } else {
-                    println!(
-                        "{} Warning: Output file not found: {}",
-                        "!".yellow(),
-                        full_lib_path.display()
-                    );
-                }
-            }
+impl FetchState {
+    fn add_include(&mut self, candidate: PathBuf) {
+        if candidate.exists() && self.include_seen.insert(candidate.clone()) {
+            self.include_paths.push(candidate);
         }
     }
 
-    lockfile.save()?;
-    Ok((include_paths, extra_cflags, link_flags))
+    fn into_result(self) -> FetchResult {
+        (
+            self.include_paths,
+            self.extra_cflags,
+            self.link_flags,
+            self.module_files,
+        )
+    }
+}
+
+#[derive(Clone)]
+struct GitDependencySpec {
+    url: String,
+    build_script: Option<String>,
+    output_file: Option<String>,
+    tag: Option<String>,
+    branch: Option<String>,
+    rev: Option<String>,
+}
+
+fn pkg_dependency_name(dep_data: &Dependency) -> Option<&str> {
+    if let Dependency::Complex {
+        pkg: Some(pkg_name),
+        ..
+    } = dep_data
+    {
+        Some(pkg_name)
+    } else {
+        None
+    }
+}
+
+fn extract_git_dependency_spec(dep_data: &Dependency) -> Option<GitDependencySpec> {
+    match dep_data {
+        Dependency::Simple(url) => Some(GitDependencySpec {
+            url: url.clone(),
+            build_script: None,
+            output_file: None,
+            tag: None,
+            branch: None,
+            rev: None,
+        }),
+        Dependency::Complex {
+            git: Some(url),
+            build,
+            output,
+            tag,
+            branch,
+            rev,
+            ..
+        } => Some(GitDependencySpec {
+            url: url.clone(),
+            build_script: build.clone(),
+            output_file: output.clone(),
+            tag: tag.clone(),
+            branch: branch.clone(),
+            rev: rev.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn resolve_system_package(pkg_name: &str, state: &mut FetchState) {
+    println!("   {} Resolving system pkg: {}", "🔎".cyan(), pkg_name);
+
+    let cflags_ok = append_pkg_config_flags(pkg_name, "--cflags", &mut state.extra_cflags);
+    if !cflags_ok {
+        println!("{} Warning: pkg-config tool not found", "!".yellow());
+        return;
+    }
+
+    let libs_ok = append_pkg_config_flags(pkg_name, "--libs", &mut state.link_flags);
+    if !libs_ok {
+        println!("{} Package '{}' not found via pkg-config", "x".red(), pkg_name);
+    }
+}
+
+fn append_pkg_config_flags(pkg_name: &str, flag_kind: &str, out: &mut Vec<String>) -> bool {
+    let Ok(output) = Command::new("pkg-config").args([flag_kind, pkg_name]).output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let out_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !out_str.is_empty() {
+        out.extend(out_str.split_whitespace().map(ToOwned::to_owned));
+    }
+    true
+}
+
+fn process_git_dependency(
+    name: &str,
+    spec: &GitDependencySpec,
+    cache_dir: &Path,
+    options: FetchOptions,
+    lockfile: &mut crate::lock::LockFile,
+    state: &mut FetchState,
+) -> Result<()> {
+    state.expected_git_deps.insert(name.to_string());
+
+    let (lib_path, is_vendor) = resolve_dependency_path(name, cache_dir)?;
+    let repo = open_or_clone_repo(name, &spec.url, &lib_path, is_vendor)?;
+
+    let locked_commit = locked_commit_for(lockfile, name, &spec.url, options.enforce_lock);
+    if let Some((oid, checkout_msg)) =
+        select_checkout_target(&repo, spec, locked_commit.as_deref())
+    {
+        checkout_repo_target(&repo, oid, &checkout_msg)?;
+    }
+
+    refresh_lockfile_entry(&repo, lockfile, name, &spec.url);
+    maybe_build_dependency(name, spec, &lib_path)?;
+    register_include_paths(&lib_path, state);
+    collect_module_files(&lib_path, state);
+    collect_link_outputs(&lib_path, spec.output_file.as_deref(), &mut state.link_flags);
+    Ok(())
+}
+
+fn resolve_dependency_path(name: &str, cache_dir: &Path) -> Result<(PathBuf, bool)> {
+    let vendor_path = std::env::current_dir()?.join("vendor").join(name);
+    if vendor_path.exists() {
+        Ok((vendor_path, true))
+    } else {
+        Ok((cache_dir.join(name), false))
+    }
+}
+
+fn open_or_clone_repo(name: &str, url: &str, lib_path: &Path, is_vendor: bool) -> Result<Repository> {
+    if lib_path.exists() {
+        if is_vendor {
+            println!("   {} Using vendor: {}", "📦".blue(), name);
+        } else {
+            println!("   {} Using cached: {}", "⚡".green(), name);
+        }
+        return Repository::open(lib_path)
+            .with_context(|| format!("Failed to open cached dependency '{}'", name));
+    }
+
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.blue} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_spinner())
+            .tick_chars("⣾⣽⣻⢿⡿⣟⣯⣷"),
+    );
+    pb.set_message(format!("Downloading {}...", name));
+    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
+    match Repository::clone(url, lib_path) {
+        Ok(repo) => {
+            pb.finish_with_message(format!("{} Downloaded {}", "✓".green(), name));
+            Ok(repo)
+        }
+        Err(err) => {
+            pb.finish_with_message(format!("{} Failed {}", "x".red(), name));
+            Err(anyhow::anyhow!(
+                "Failed to clone dependency '{}': {}",
+                name,
+                err
+            ))
+        }
+    }
+}
+
+fn locked_commit_for(
+    lockfile: &crate::lock::LockFile,
+    name: &str,
+    url: &str,
+    enforce_lock: bool,
+) -> Option<String> {
+    if !enforce_lock {
+        return None;
+    }
+    lockfile
+        .get(name)
+        .filter(|entry| entry.git == url)
+        .map(|entry| entry.rev.clone())
+}
+
+fn select_checkout_target(
+    repo: &Repository,
+    spec: &GitDependencySpec,
+    locked_commit: Option<&str>,
+) -> Option<(git2::Oid, String)> {
+    if let Some(rev) = spec.rev.as_deref()
+        && let Ok(oid) = git2::Oid::from_str(rev)
+        && repo.find_object(oid, None).is_ok()
+    {
+        return Some((oid, format!("commit {}", short_hash(rev))));
+    }
+
+    if let Some(tag) = spec.tag.as_deref() {
+        let refname = format!("refs/tags/{}", tag);
+        if let Ok(reference) = repo.find_reference(&refname)
+            && let Ok(commit) = reference.peel_to_commit()
+        {
+            return Some((commit.id(), format!("tag {}", tag)));
+        }
+    }
+
+    if let Some(branch) = spec.branch.as_deref()
+        && let Some(branch_oid) = find_branch_commit(repo, branch)
+    {
+        return Some((branch_oid, format!("branch {}", branch)));
+    }
+
+    if let Some(rev) = locked_commit
+        && let Ok(oid) = git2::Oid::from_str(rev)
+        && repo.find_object(oid, None).is_ok()
+    {
+        return Some((oid, format!("locked {}", short_hash(rev))));
+    }
+
+    None
+}
+
+fn find_branch_commit(repo: &Repository, branch: &str) -> Option<git2::Oid> {
+    if let Ok(reference) = repo.find_branch(branch, git2::BranchType::Local)
+        && let Ok(commit) = reference.get().peel_to_commit()
+    {
+        return Some(commit.id());
+    }
+
+    let remote_ref = format!("origin/{}", branch);
+    if let Ok(reference) = repo.find_branch(&remote_ref, git2::BranchType::Remote)
+        && let Ok(commit) = reference.get().peel_to_commit()
+    {
+        return Some(commit.id());
+    }
+
+    None
+}
+
+fn short_hash(rev: &str) -> &str {
+    if rev.len() > 7 {
+        &rev[..7]
+    } else {
+        rev
+    }
+}
+
+fn checkout_repo_target(repo: &Repository, oid: git2::Oid, checkout_msg: &str) -> Result<()> {
+    repo.set_head_detached(oid)?;
+    let obj = repo.find_object(oid, None)?;
+    let mut checkout_opts = git2::build::CheckoutBuilder::new();
+    checkout_opts.force();
+    repo.checkout_tree(&obj, Some(&mut checkout_opts))
+        .context(format!("Failed to checkout {}", checkout_msg))?;
+    println!("   {} Locked to {}", "📌".blue(), checkout_msg);
+    Ok(())
+}
+
+fn refresh_lockfile_entry(
+    repo: &Repository,
+    lockfile: &mut crate::lock::LockFile,
+    name: &str,
+    url: &str,
+) {
+    if let Ok(head) = repo.head()
+        && let Ok(target) = head.peel_to_commit()
+    {
+        lockfile.insert(name.to_string(), url.to_string(), target.id().to_string());
+    }
+}
+
+fn maybe_build_dependency(name: &str, spec: &GitDependencySpec, lib_path: &Path) -> Result<()> {
+    let output_name = spec.output_file.as_deref().unwrap_or("");
+    let prebuilt_success = if output_name.is_empty() {
+        false
+    } else {
+        try_download_prebuilt(name, &spec.url, spec.tag.as_deref(), lib_path, output_name)
+            .unwrap_or(false)
+    };
+
+    if prebuilt_success {
+        return Ok(());
+    }
+    let Some(cmd_str) = spec.build_script.as_deref() else {
+        return Ok(());
+    };
+
+    let should_build = if output_name.is_empty() {
+        true
+    } else {
+        !lib_path.join(output_name).exists()
+    };
+    if !should_build {
+        return Ok(());
+    }
+
+    println!("   {} Building {}...", "🔨".yellow(), name);
+    let status = if cfg!(target_os = "windows") {
+        Command::new("cmd")
+            .args(["/C", cmd_str])
+            .current_dir(lib_path)
+            .status()
+    } else {
+        Command::new("sh")
+            .args(["-c", cmd_str])
+            .current_dir(lib_path)
+            .status()
+    };
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        _ => {
+            println!("{} Build script failed for {}", "x".red(), name);
+            Ok(())
+        }
+    }
+}
+
+fn register_include_paths(lib_path: &Path, state: &mut FetchState) {
+    state.add_include(lib_path.to_path_buf());
+    state.add_include(lib_path.join("include"));
+    state.add_include(lib_path.join("src"));
+    state.add_include(lib_path.join("build").join("include"));
+    state.add_include(lib_path.join("build").join("include").join("SDL2"));
+    state.add_include(lib_path.join("dist"));
+    state.add_include(lib_path.join("dist").join("include"));
+}
+
+fn collect_module_files(lib_path: &Path, state: &mut FetchState) {
+    let src_path = lib_path.join("src");
+    if !src_path.exists() {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(&src_path) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if let Some(ext) = path.extension().and_then(|e| e.to_str())
+            && ["cppm", "ixx", "mpp"].contains(&ext)
+            && state.module_seen.insert(path.clone())
+        {
+            state.module_files.push((path, lib_path.to_path_buf()));
+        }
+    }
+}
+
+fn collect_link_outputs(lib_path: &Path, output_file: Option<&str>, link_flags: &mut Vec<String>) {
+    let Some(out_file) = output_file else {
+        return;
+    };
+
+    for single_output in out_file.split(',').map(|s| s.trim()) {
+        let full_lib_path = lib_path.join(single_output);
+        if full_lib_path.exists() {
+            link_flags.push(full_lib_path.to_string_lossy().to_string());
+        } else {
+            println!(
+                "{} Warning: Output file not found: {}",
+                "!".yellow(),
+                full_lib_path.display()
+            );
+        }
+    }
 }

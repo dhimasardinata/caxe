@@ -17,6 +17,8 @@ mod fetch;
 mod manage;
 mod vendor;
 
-pub use fetch::fetch_dependencies;
+pub use fetch::{
+    FetchOptions, FetchResult, ModuleFile, fetch_dependencies, fetch_dependencies_with_options,
+};
 pub use manage::{add_dependency, remove_dependency, update_dependencies};
 pub use vendor::vendor_dependencies;

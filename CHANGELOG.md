@@ -5,30 +5,20 @@ All notable changes to caxe will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] - v0.3.8
+## [Unreleased]
 
-### Added
-- **Dual licensing**: MIT OR Apache-2.0 (Rust ecosystem standard)
-- **License files**: LICENSE-MIT and LICENSE-APACHE
-- **Funding infrastructure**: GitHub Sponsors, Ko-fi, Open Collective, crypto wallets
-- **CONTRIBUTING.md**: Development workflow and guidelines
-- **SECURITY.md**: Security vulnerability reporting policy
-- **CODE_OF_CONDUCT.md**: Contributor Covenant
-- **GitHub templates**: Issue and PR templates
-- **.editorconfig**: Consistent code style
-- **SHA256 hash verification** for prebuilt binary downloads
-- **47 unit tests** (from 6): templates, config, registry, stats, lock
-- **4 integration tests** for build commands
-- **100% module documentation** (39/39 modules)
-- **README badges**: License, Docs, Sponsor
-
-### Changed
-- **Extracted CLI handlers** to `src/commands/` module (main.rs reduced 40%)
-- **Enhanced progress bars** with unique styles per operation
-
-### Fixed
-- Removed unsafe `unwrap()` call in `commands/target.rs`
-- All `ProgressStyle::template().unwrap()` calls now have fallbacks
+## [0.3.8] - Defects-First Stabilization & Governance 🛠️
+- Canonicalized artifact paths to `.cx/<profile>/bin` across build/package/IDE/docker flows
+- Updated `cx watch` non-test mode to rebuild-only behavior (no auto-run)
+- Made `cx lock --check` strict (missing/extra/URL mismatch) and `cx sync` fail-fast on stale lockfiles
+- Made `cx target add/remove/default` explicit deferred operations with non-zero exit and `--profile` guidance
+- Added deterministic object naming and improved test recompilation freshness logic
+- Persisted import source scanning for non-`src` project layouts
+- Improved performance in cache pruning, dependency fetching, and package zip streaming
+- Added dual licensing (`MIT OR Apache-2.0`) with `LICENSE-MIT` and `LICENSE-APACHE`
+- Added contributor/community governance docs and templates (`CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue/PR templates)
+- Expanded test coverage and module documentation
+- Improved CLI maintainability with extracted command handlers and safer progress-style fallbacks
 
 ---
 
@@ -147,7 +137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/dhimasardinata/caxe/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/dhimasardinata/caxe/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/dhimasardinata/caxe/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/dhimasardinata/caxe/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/dhimasardinata/caxe/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/dhimasardinata/caxe/compare/v0.3.4...v0.3.5

@@ -149,7 +149,7 @@ pub fn update_dependencies() -> Result<()> {
     let cache_dir = home_dir.join(".cx").join("cache");
 
     if let Some(deps) = config.dependencies {
-        for (name, dep_data) in deps {
+        for (name, dep_data) in &deps {
             let is_git = matches!(
                 dep_data,
                 crate::config::Dependency::Simple(_)
@@ -157,7 +157,7 @@ pub fn update_dependencies() -> Result<()> {
             );
 
             if is_git {
-                let lib_path = cache_dir.join(&name);
+                let lib_path = cache_dir.join(name);
                 if lib_path.exists() {
                     print!("   Updating {} ... ", name);
 
@@ -198,6 +198,16 @@ pub fn update_dependencies() -> Result<()> {
                 }
             }
         }
+
+        // Refresh lockfile from current dependency state (ignore existing lock pins).
+        super::fetch::fetch_dependencies_with_options(
+            &deps,
+            super::fetch::FetchOptions {
+                enforce_lock: false,
+            },
+        )?;
+    } else {
+        println!("{} No dependencies found in cx.toml", "!".yellow());
     }
 
     println!("{} Dependencies updated.", "✓".green());

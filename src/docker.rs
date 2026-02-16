@@ -23,10 +23,22 @@ pub fn generate_docker_config() -> Result<()> {
 
     // Determine project name for the binary
     let current_dir = std::env::current_dir()?;
-    let project_name = current_dir
+    let fallback_name = current_dir
         .file_name()
         .unwrap_or(std::ffi::OsStr::new("app"))
-        .to_string_lossy();
+        .to_string_lossy()
+        .to_string();
+    let (project_name, bin_basename) = match crate::build::load_config() {
+        Ok(config) => (
+            config.package.name.clone(),
+            crate::build::binary_basename(&config),
+        ),
+        Err(_) => (fallback_name.clone(), fallback_name.clone()),
+    };
+    let artifact_bin_dir = crate::build::artifact_bin_dir(true)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let artifact_bin_path = format!("{}/{}", artifact_bin_dir, bin_basename);
 
     // Multi-stage build
     let dockerfile_content = format!(
@@ -58,12 +70,12 @@ RUN cx build --release
 FROM ubuntu:22.04-slim
 
 # Copy artifacts
-COPY --from=builder /app/build/bin/{} /usr/local/bin/app
+COPY --from=builder /app/{} /usr/local/bin/app
 
 # Run
 CMD ["app"]
 "#,
-        project_name
+        artifact_bin_path
     );
 
     fs::write("Dockerfile", dockerfile_content).context("Failed to write Dockerfile")?;

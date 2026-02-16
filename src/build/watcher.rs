@@ -9,7 +9,7 @@
 //! - `cx watch --test` - TDD mode: run tests on every change
 
 use super::core;
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use colored::*;
 use notify::{Config, RecursiveMode, Watcher};
 use std::path::Path;
@@ -48,10 +48,25 @@ fn run_and_clear(run_tests: bool) {
     print!("\x1B[2J\x1B[1;1H");
     println!("{} File changed. Rebuilding...", "🔄".yellow());
 
-    let result = if run_tests {
+    let result: Result<()> = if run_tests {
         super::test::run_tests(None)
     } else {
-        core::build_and_run(false, false, false, vec![], None)
+        match super::load_config() {
+            Ok(config) => {
+                let options = core::BuildOptions {
+                    release: false,
+                    verbose: false,
+                    dry_run: false,
+                    ..Default::default()
+                };
+                match core::build_project(&config, &options) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(anyhow!("Build failed")),
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
+        }
     };
 
     if let Err(e) = result {

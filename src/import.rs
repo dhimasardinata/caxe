@@ -62,7 +62,11 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
     let name = if path.join("CMakeLists.txt").exists() {
         // Try to parse project(NAME)
         if let Ok(content) = fs::read_to_string(path.join("CMakeLists.txt")) {
-            let re = regex::Regex::new(r"project\s*\(\s*(\w+)").unwrap();
+            let re = {
+                use std::sync::OnceLock;
+                static RE: OnceLock<regex::Regex> = OnceLock::new();
+                RE.get_or_init(|| regex::Regex::new(r"project\s*\(\s*(\w+)").unwrap())
+            };
             if let Some(caps) = re.captures(&content) {
                 caps.get(1).map(|m| m.as_str().to_string())
             } else {
@@ -107,6 +111,14 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
         cflags.push(format!("-I{}", inc));
     }
 
+    let mut source_list: Vec<String> = sources
+        .iter()
+        .filter_map(|src| src.strip_prefix(path).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .collect();
+    source_list.sort();
+    source_list.dedup();
+
     let config = CxConfig {
         package: PackageConfig {
             name,
@@ -124,9 +136,17 @@ pub fn scan_project(path: &Path) -> Result<Option<CxConfig>> {
             cflags: None,
             libs: None, // Hard to guess libs from source
             ldflags: None,
-            sources: None,
+            sources: if source_list.is_empty() {
+                None
+            } else {
+                Some(source_list)
+            },
             pch: None,
             subsystem: None,
+            framework: None,
+            include: None,
+            build_type: None,
+            encoding: "utf-8".to_string(),
         }),
         dependencies: None, // Hard to guess deps
         scripts: None,
@@ -163,6 +183,12 @@ mod tests {
         assert_eq!(config.package.edition, "c++20");
         let build_cfg = config.build.as_ref().unwrap();
         let compiler = build_cfg.compiler.as_ref().unwrap();
+        assert!(
+            build_cfg
+                .sources
+                .as_ref()
+                .is_some_and(|sources| sources.iter().any(|s| s == "src/main.cpp"))
+        );
         assert!(
             compiler.contains("msvc")
                 || compiler.contains("clang")

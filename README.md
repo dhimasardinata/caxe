@@ -33,7 +33,7 @@ It provides a unified workflow for scaffolding, building, testing, formatting, a
 - **📊 Insights**: `cx stats` for code metrics and `cx tree` for dependency graphs.
 - **🌍 WebAssembly**: `cx build --wasm` (via Emscripten) support out of the box.
 - **🤖 Arduino/IoT**: Auto-detect `.ino` files, build and upload via `arduino-cli`.
-- **🎯 Cross-Platform Targets**: Manage build targets (Windows, Linux, macOS, WebAssembly, ESP32).
+- **🎯 Cross-Platform Profiles**: Configure target-specific build profiles via `[profile:<name>]`.
 - **🛡️ Safety**: `cx build --sanitize` for Address/Undefined Behavior sanitizers.
 - **🎨 Code Formatting**: Built-in `cx fmt` command (via `clang-format`) with `--check` for CI.
 - **🎯 Build Profiles**: Custom profiles with inheritance for cross-compilation (`--profile esp32`).
@@ -109,6 +109,7 @@ cx new my-game --template sdl3
   - `--sanitize=<check>`: Enable runtime sanitizers (e.g., `address`, `undefined`).
   - `--trace`: Generate build trace (`.cx/build/build_trace.json` for Chrome Tracing).
 - **`cx watch`**: Rebuild on file save.
+  - `--test`: Run tests on every file change (TDD mode).
 - **`cx clean`**: Remove build artifacts.
 - **`cx package`**: Create a distribution archive (ZIP) containing the executable, DLLs, and assets.
 
@@ -118,9 +119,9 @@ cx new my-game --template sdl3
 - **`cx new myproject --template arduino`**: Create Arduino project.
 
 ### Cross-Platform
-- **`cx target list`**: Show available cross-compilation targets.
-- **`cx target add <name>`**: Add a target to your project.
-- **`cx target remove <name>`**: Remove a target.
+- **`cx target list`**: Show available cross-compilation presets.
+- **`cx target add/remove/default`**: Deferred command surface (use profiles instead).
+- **`cx build --profile <name>`**: Build using profile settings in `cx.toml`.
 - **`cx generate cmake`**: Generate CMakeLists.txt from cx.toml.
 - **`cx generate ninja`**: Generate build.ninja from cx.toml.
 
@@ -129,8 +130,9 @@ cx new my-game --template sdl3
 - **`cx remove <lib>`**: Remove a dependency.
 - **`cx update`**: Update dependencies to latest versions.
 - **`cx vendor`**: Copy all dependencies into `vendor/` for commit/offline use.
-- **`cx lock`**: Manage `cx.lock` file (`--check`, `--update`).
-- **`cx sync`**: Synchronize dependencies with `cx.lock` to ensure reproducible builds.
+- **`cx lock --check`**: Strictly verify lockfile consistency (missing/extra/URL mismatch).
+- **`cx lock --update`**: Refresh lockfile state from current dependencies.
+- **`cx sync`**: Synchronize dependencies with `cx.lock` (fails fast if lock is out of sync).
 - **`cx tree`**: Visualize the dependency graph.
 
 ### Testing & Quality
