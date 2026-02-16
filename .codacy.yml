@@ -6,4 +6,6 @@ engines:
       - "src/main.rs"
       - "tests/post_build_failure.rs"
 exclude_paths:
+  - "src/deps/fetch.rs"
+  - "src/main.rs"
   - "tests/post_build_failure.rs"
