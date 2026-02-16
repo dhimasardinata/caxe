@@ -44,35 +44,73 @@ fn config_git_dependencies(config: &CxConfig) -> HashMap<String, String> {
     deps_map
 }
 
-fn compare_lockfile(config: &CxConfig, lockfile: &lock::LockFile) -> LockComparison {
-    let git_deps = config_git_dependencies(config);
-    let mut comparison = LockComparison::default();
-
-    for (name, expected_git) in &git_deps {
-        match lockfile.get(name) {
-            None => comparison.missing_in_lock.push(name.clone()),
-            Some(entry) => {
-                if entry.git != *expected_git {
-                    comparison.url_mismatch.push((
-                        name.clone(),
-                        expected_git.clone(),
-                        entry.git.clone(),
-                    ));
-                }
+fn evaluate_dep_lock_state(
+    name: &str,
+    expected_git: &str,
+    lockfile: &lock::LockFile,
+    missing_in_lock: &mut Vec<String>,
+    url_mismatch: &mut Vec<(String, String, String)>,
+) {
+    match lockfile.get(name) {
+        None => missing_in_lock.push(name.to_string()),
+        Some(entry) => {
+            if entry.git != expected_git {
+                url_mismatch.push((
+                    name.to_string(),
+                    expected_git.to_string(),
+                    entry.git.clone(),
+                ));
             }
         }
     }
+}
 
-    for name in lockfile.packages.keys() {
-        if !git_deps.contains_key(name) {
-            comparison.extra_in_lock.push(name.clone());
-        }
+fn collect_expected_dep_diffs(
+    git_deps: &HashMap<String, String>,
+    lockfile: &lock::LockFile,
+) -> (Vec<String>, Vec<(String, String, String)>) {
+    let mut missing_in_lock = Vec::new();
+    let mut url_mismatch = Vec::new();
+
+    for (name, expected_git) in git_deps {
+        evaluate_dep_lock_state(
+            name,
+            expected_git,
+            lockfile,
+            &mut missing_in_lock,
+            &mut url_mismatch,
+        );
     }
 
-    comparison.missing_in_lock.sort();
-    comparison.extra_in_lock.sort();
-    comparison.url_mismatch.sort_by(|a, b| a.0.cmp(&b.0));
-    comparison
+    (missing_in_lock, url_mismatch)
+}
+
+fn collect_extra_lock_entries(
+    git_deps: &HashMap<String, String>,
+    lockfile: &lock::LockFile,
+) -> Vec<String> {
+    lockfile
+        .packages
+        .keys()
+        .filter(|name| !git_deps.contains_key(*name))
+        .cloned()
+        .collect()
+}
+
+fn compare_lockfile(config: &CxConfig, lockfile: &lock::LockFile) -> LockComparison {
+    let git_deps = config_git_dependencies(config);
+    let (mut missing_in_lock, mut url_mismatch) = collect_expected_dep_diffs(&git_deps, lockfile);
+    let mut extra_in_lock = collect_extra_lock_entries(&git_deps, lockfile);
+
+    missing_in_lock.sort();
+    extra_in_lock.sort();
+    url_mismatch.sort_by(|a, b| a.0.cmp(&b.0));
+
+    LockComparison {
+        missing_in_lock,
+        extra_in_lock,
+        url_mismatch,
+    }
 }
 
 fn print_lock_comparison(comparison: &LockComparison) {
