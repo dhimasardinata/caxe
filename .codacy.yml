@@ -3,9 +3,19 @@ engines:
   metric:
     exclude_paths:
       - "src/deps/fetch.rs"
+      - "**/src/deps/fetch.rs"
       - "src/main.rs"
+      - "**/src/main.rs"
       - "tests/post_build_failure.rs"
+  lizard:
+    exclude_paths:
+      - "src/deps/fetch.rs"
+      - "**/src/deps/fetch.rs"
+      - "src/main.rs"
+      - "**/src/main.rs"
 exclude_paths:
   - "src/deps/fetch.rs"
+  - "**/src/deps/fetch.rs"
   - "src/main.rs"
+  - "**/src/main.rs"
   - "tests/post_build_failure.rs"
