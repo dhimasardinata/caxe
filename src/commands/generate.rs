@@ -48,10 +48,7 @@ fn generate_cmake(config: &CxConfig) -> Result<()> {
     println!("{} Generating CMakeLists.txt...", "📝".cyan());
 
     let name = &config.package.name;
-    let edition = &config.package.edition;
-
-    // Convert edition to CMake standard
-    let cpp_standard = edition.replace("c++", "").replace("c", "");
+    let cpp_standard = config.package.edition.replace("c++", "").replace("c", "");
 
     let mut cmake = format!(
         r#"cmake_minimum_required(VERSION 3.16)
@@ -72,24 +69,8 @@ target_include_directories(${{PROJECT_NAME}} PRIVATE src)
 "#
     );
 
-    // Add dependencies if present
-    if let Some(deps) = &config.dependencies {
-        cmake.push_str("\n# Dependencies\n");
-        for dep_name in deps.keys() {
-            cmake.push_str(&format!("# find_package({} REQUIRED)\n", dep_name));
-        }
-    }
-
-    // Add libs if present
-    if let Some(build) = &config.build
-        && let Some(libs) = &build.libs
-    {
-        cmake.push_str("\n# Libraries\ntarget_link_libraries(${PROJECT_NAME} PRIVATE");
-        for lib in libs {
-            cmake.push_str(&format!(" {}", lib));
-        }
-        cmake.push_str(")\n");
-    }
+    append_cmake_dependencies(&mut cmake, config);
+    append_cmake_libraries(&mut cmake, config);
 
     std::fs::write("CMakeLists.txt", cmake)?;
     println!("{} Created CMakeLists.txt", "✓".green());
@@ -102,6 +83,32 @@ target_include_directories(${{PROJECT_NAME}} PRIVATE src)
     );
 
     Ok(())
+}
+
+fn append_cmake_dependencies(cmake: &mut String, config: &CxConfig) {
+    let Some(deps) = &config.dependencies else {
+        return;
+    };
+
+    cmake.push_str("\n# Dependencies\n");
+    for dep_name in deps.keys() {
+        cmake.push_str(&format!("# find_package({} REQUIRED)\n", dep_name));
+    }
+}
+
+fn append_cmake_libraries(cmake: &mut String, config: &CxConfig) {
+    let Some(build) = &config.build else {
+        return;
+    };
+    let Some(libs) = &build.libs else {
+        return;
+    };
+
+    cmake.push_str("\n# Libraries\ntarget_link_libraries(${PROJECT_NAME} PRIVATE");
+    for lib in libs {
+        cmake.push_str(&format!(" {}", lib));
+    }
+    cmake.push_str(")\n");
 }
 
 fn generate_ninja(config: &CxConfig) -> Result<()> {

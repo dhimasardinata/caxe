@@ -54,15 +54,14 @@ fn bench_lock_parse(c: &mut Criterion) {
 }
 
 fn bench_scan_project(c: &mut Criterion) {
-    // Setup a temp dir for scanning
-    let temp_dir = std::env::temp_dir().join("caxe_bench_scan");
-    if !temp_dir.exists() {
-        std::fs::create_dir_all(temp_dir.join("src")).unwrap();
-        std::fs::write(temp_dir.join("src/main.cpp"), "int main() { return 0; }").unwrap();
-    }
+    // Setup an isolated temp dir for scanning
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project_dir = temp_dir.path().join("caxe_bench_scan");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(project_dir.join("src/main.cpp"), "int main() { return 0; }").unwrap();
 
     c.bench_function("scan_project_simple", |b| {
-        b.iter(|| import::scan_project(black_box(&temp_dir)).unwrap())
+        b.iter(|| import::scan_project(black_box(&project_dir)).unwrap())
     });
 }
 

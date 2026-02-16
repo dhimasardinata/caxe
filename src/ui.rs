@@ -176,20 +176,19 @@ fn sanitize_content(s: &str) -> String {
 
 fn strip_ansi(s: &str) -> String {
     let mut result = String::new();
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            if let Some(&'[') = chars.peek() {
-                chars.next();
-                for c in chars.by_ref() {
-                    if c == 'm' {
-                        break;
-                    }
-                }
-            }
-        } else {
-            result.push(c);
+    let mut in_escape = false;
+    for c in s.chars() {
+        if !in_escape && c == '\x1b' {
+            in_escape = true;
+            continue;
         }
+        if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+            continue;
+        }
+        result.push(c);
     }
     result
 }

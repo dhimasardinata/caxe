@@ -13,6 +13,31 @@ use colored::*;
 use std::fs;
 use std::path::Path;
 
+fn load_project_names() -> Result<(String, String)> {
+    let current_dir = std::env::current_dir()?;
+    let fallback_name = current_dir
+        .file_name()
+        .unwrap_or(std::ffi::OsStr::new("app"))
+        .to_string_lossy()
+        .to_string();
+
+    Ok(match crate::build::load_config() {
+        Ok(config) => (
+            config.package.name.clone(),
+            crate::build::binary_basename(&config),
+        ),
+        Err(_) => (fallback_name.clone(), fallback_name),
+    })
+}
+
+fn write_dockerignore_if_missing() -> Result<()> {
+    if Path::new(".dockerignore").exists() {
+        return Ok(());
+    }
+    fs::write(".dockerignore", "build/\n.git/\n.cx/\nvendor/\n")?;
+    Ok(())
+}
+
 pub fn generate_docker_config() -> Result<()> {
     println!("{} Generating Docker Configuration...", "🐳".blue());
 
@@ -21,20 +46,7 @@ pub fn generate_docker_config() -> Result<()> {
         return Ok(());
     }
 
-    // Determine project name for the binary
-    let current_dir = std::env::current_dir()?;
-    let fallback_name = current_dir
-        .file_name()
-        .unwrap_or(std::ffi::OsStr::new("app"))
-        .to_string_lossy()
-        .to_string();
-    let (project_name, bin_basename) = match crate::build::load_config() {
-        Ok(config) => (
-            config.package.name.clone(),
-            crate::build::binary_basename(&config),
-        ),
-        Err(_) => (fallback_name.clone(), fallback_name.clone()),
-    };
+    let (project_name, bin_basename) = load_project_names()?;
     let artifact_bin_dir = crate::build::artifact_bin_dir(true)
         .to_string_lossy()
         .replace('\\', "/");
@@ -80,11 +92,7 @@ CMD ["app"]
 
     fs::write("Dockerfile", dockerfile_content).context("Failed to write Dockerfile")?;
 
-    // .dockerignore
-    let ignore_content = "build/\n.git/\n.cx/\nvendor/\n";
-    if !Path::new(".dockerignore").exists() {
-        fs::write(".dockerignore", ignore_content)?;
-    }
+    write_dockerignore_if_missing()?;
 
     println!("{} Created Dockerfile & .dockerignore", "✓".green());
     println!("   Run: docker build -t {} .", project_name);

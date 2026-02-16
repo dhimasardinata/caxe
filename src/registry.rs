@@ -116,6 +116,49 @@ pub fn resolve_alias(name: &str) -> Option<String> {
     Registry::get(name)
 }
 
+fn ensure_cx_toml_exists() -> Result<()> {
+    use std::path::Path;
+    if Path::new("cx.toml").exists() {
+        Ok(())
+    } else {
+        anyhow::bail!("No cx.toml found. Run 'cx init' or 'cx new' first.")
+    }
+}
+
+fn dependency_exists(content: &str, name: &str) -> bool {
+    let name_lower = name.to_lowercase();
+    content
+        .to_lowercase()
+        .contains(&format!("{} =", name_lower))
+}
+
+fn with_added_dependency(content: &str, dep_line: &str) -> String {
+    if content.contains("[dependencies]") {
+        content.replace("[dependencies]", &format!("[dependencies]\n{}", dep_line))
+    } else {
+        format!("{}\n\n[dependencies]\n{}\n", content.trim(), dep_line)
+    }
+}
+
+fn remove_dependency_line(content: &str, name: &str) -> (String, bool) {
+    let name_lower = name.to_lowercase();
+    let mut found = false;
+    let new_lines: Vec<&str> = content
+        .lines()
+        .filter(|line| {
+            let line_lower = line.to_lowercase().trim_start().to_string();
+            let matches = line_lower.starts_with(&format!("{} =", name_lower))
+                || line_lower.starts_with(&format!("\"{}\"", name_lower));
+            if matches {
+                found = true;
+            }
+            !matches
+        })
+        .collect();
+
+    (new_lines.join("\n"), found)
+}
+
 pub fn search(query: &str) -> Vec<(String, String)> {
     let registry = Registry::load().unwrap_or_else(|_| Registry::default());
     let query = query.to_lowercase();
@@ -137,12 +180,7 @@ pub fn search(query: &str) -> Vec<(String, String)> {
 
 /// Add a package to cx.toml
 pub fn add_package(name: &str) -> Result<()> {
-    use std::path::Path;
-
-    // Check if cx.toml exists
-    if !Path::new("cx.toml").exists() {
-        anyhow::bail!("No cx.toml found. Run 'cx init' or 'cx new' first.");
-    }
+    ensure_cx_toml_exists()?;
 
     // Get package URL from registry
     let url = resolve_alias(name).ok_or_else(|| {
@@ -157,11 +195,7 @@ pub fn add_package(name: &str) -> Result<()> {
     let content = fs::read_to_string("cx.toml")?;
 
     // Check if package already exists
-    let name_lower = name.to_lowercase();
-    if content
-        .to_lowercase()
-        .contains(&format!("{} =", name_lower))
-    {
+    if dependency_exists(&content, name) {
         println!("   {} {} is already in dependencies", "⚡".yellow(), name);
         return Ok(());
     }
@@ -169,14 +203,7 @@ pub fn add_package(name: &str) -> Result<()> {
     // Build the dependency line
     let dep_line = format!("{} = \"{}\"", name, url);
 
-    // Check if [dependencies] section exists
-    let new_content = if content.contains("[dependencies]") {
-        // Add after [dependencies] line
-        content.replace("[dependencies]", &format!("[dependencies]\n{}", dep_line))
-    } else {
-        // Add new [dependencies] section at the end
-        format!("{}\n\n[dependencies]\n{}\n", content.trim(), dep_line)
-    };
+    let new_content = with_added_dependency(&content, &dep_line);
 
     fs::write("cx.toml", new_content)?;
 
@@ -188,36 +215,16 @@ pub fn add_package(name: &str) -> Result<()> {
 
 /// Remove a package from cx.toml
 pub fn remove_package(name: &str) -> Result<()> {
-    use std::path::Path;
-
-    if !Path::new("cx.toml").exists() {
-        anyhow::bail!("No cx.toml found in current directory");
-    }
+    ensure_cx_toml_exists()?;
 
     let content = fs::read_to_string("cx.toml")?;
-    let name_lower = name.to_lowercase();
-
-    // Find and remove the line containing the package
-    let mut found = false;
-    let new_lines: Vec<&str> = content
-        .lines()
-        .filter(|line| {
-            let line_lower = line.to_lowercase().trim_start().to_string();
-            let matches = line_lower.starts_with(&format!("{} =", name_lower))
-                || line_lower.starts_with(&format!("\"{}\"", name_lower));
-            if matches {
-                found = true;
-            }
-            !matches
-        })
-        .collect();
-
+    let (new_content, found) = remove_dependency_line(&content, name);
     if !found {
         println!("   {} {} not found in dependencies", "⚠".yellow(), name);
         return Ok(());
     }
 
-    fs::write("cx.toml", new_lines.join("\n"))?;
+    fs::write("cx.toml", new_content)?;
 
     println!(
         "   {} Removed {} from dependencies",

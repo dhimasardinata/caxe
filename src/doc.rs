@@ -4,26 +4,24 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-pub fn generate_docs() -> Result<()> {
-    println!("{} Generating documentation...", "📚".magenta());
+fn doxygen_exists() -> bool {
+    Command::new("doxygen").arg("--version").output().is_ok()
+}
 
-    // 1. Check for Doxygen
-    if Command::new("doxygen").arg("--version").output().is_err() {
-        println!("{} Doxygen not found. Please install it first.", "x".red());
+fn ensure_doxyfile() -> Result<()> {
+    if Path::new("Doxyfile").exists() {
         return Ok(());
     }
 
-    // 2. Create default Doxyfile if not exists
-    if !Path::new("Doxyfile").exists() {
-        println!("   Creating default Doxyfile...");
-        let project_name = std::env::current_dir()?
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
+    println!("   Creating default Doxyfile...");
+    let project_name = std::env::current_dir()?
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
 
-        let doxy_content = format!(
-            r#"PROJECT_NAME           = "{}"
+    let doxy_content = format!(
+        r#"PROJECT_NAME           = "{}"
 OUTPUT_DIRECTORY       = docs
 INPUT                  = src
 RECURSIVE              = YES
@@ -32,12 +30,13 @@ GENERATE_LATEX         = NO
 OPTIMIZE_OUTPUT_FOR_C  = YES
 EXTRACT_ALL            = YES
 "#,
-            project_name
-        );
-        fs::write("Doxyfile", doxy_content)?;
-    }
+        project_name
+    );
+    fs::write("Doxyfile", doxy_content)?;
+    Ok(())
+}
 
-    // 3. Run Doxygen
+fn run_doxygen() -> Result<std::process::Output> {
     let pb = indicatif::ProgressBar::new_spinner();
     pb.set_style(
         indicatif::ProgressStyle::default_spinner()
@@ -49,15 +48,27 @@ EXTRACT_ALL            = YES
     pb.set_message("Running Doxygen...");
 
     let output = Command::new("doxygen").output()?;
+    pb.finish_and_clear();
+    Ok(output)
+}
+
+pub fn generate_docs() -> Result<()> {
+    println!("{} Generating documentation...", "📚".magenta());
+
+    if !doxygen_exists() {
+        println!("{} Doxygen not found. Please install it first.", "x".red());
+        return Ok(());
+    }
+
+    ensure_doxyfile()?;
+    let output = run_doxygen()?;
 
     if output.status.success() {
-        pb.finish_and_clear();
         println!(
             "{} Documentation generated in docs/html/index.html",
             "✓".green()
         );
     } else {
-        pb.finish_and_clear();
         println!("{} Doxygen failed:", "x".red());
         println!("{}", String::from_utf8_lossy(&output.stderr));
     }
