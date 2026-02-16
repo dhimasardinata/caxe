@@ -44,27 +44,6 @@ fn config_git_dependencies(config: &CxConfig) -> HashMap<String, String> {
     deps_map
 }
 
-fn evaluate_dep_lock_state(
-    name: &str,
-    expected_git: &str,
-    lockfile: &lock::LockFile,
-    missing_in_lock: &mut Vec<String>,
-    url_mismatch: &mut Vec<(String, String, String)>,
-) {
-    match lockfile.get(name) {
-        None => missing_in_lock.push(name.to_string()),
-        Some(entry) => {
-            if entry.git != expected_git {
-                url_mismatch.push((
-                    name.to_string(),
-                    expected_git.to_string(),
-                    entry.git.clone(),
-                ));
-            }
-        }
-    }
-}
-
 fn collect_expected_dep_diffs(
     git_deps: &HashMap<String, String>,
     lockfile: &lock::LockFile,
@@ -73,13 +52,13 @@ fn collect_expected_dep_diffs(
     let mut url_mismatch = Vec::new();
 
     for (name, expected_git) in git_deps {
-        evaluate_dep_lock_state(
-            name,
-            expected_git,
-            lockfile,
-            &mut missing_in_lock,
-            &mut url_mismatch,
-        );
+        match lockfile.get(name) {
+            None => missing_in_lock.push(name.clone()),
+            Some(entry) if entry.git != *expected_git => {
+                url_mismatch.push((name.clone(), expected_git.clone(), entry.git.clone()))
+            }
+            Some(_) => {}
+        }
     }
 
     (missing_in_lock, url_mismatch)
@@ -113,27 +92,33 @@ fn compare_lockfile(config: &CxConfig, lockfile: &lock::LockFile) -> LockCompari
     }
 }
 
+fn print_extra_lock_entry(dep: &str) {
+    println!(
+        "{} Lockfile contains '{}' which is no longer in cx.toml",
+        "x".red(),
+        dep
+    );
+}
+
+fn print_url_mismatch(name: &str, expected: &str, found: &str) {
+    println!(
+        "{} Dependency '{}' URL mismatch\n  expected: {}\n  lockfile: {}",
+        "x".red(),
+        name,
+        expected,
+        found
+    );
+}
+
 fn print_lock_comparison(comparison: &LockComparison) {
     for dep in &comparison.missing_in_lock {
         println!("{} Dependency '{}' missing from cx.lock", "x".red(), dep);
     }
-
     for dep in &comparison.extra_in_lock {
-        println!(
-            "{} Lockfile contains '{}' which is no longer in cx.toml",
-            "x".red(),
-            dep
-        );
+        print_extra_lock_entry(dep);
     }
-
     for (name, expected, found) in &comparison.url_mismatch {
-        println!(
-            "{} Dependency '{}' URL mismatch\n  expected: {}\n  lockfile: {}",
-            "x".red(),
-            name,
-            expected,
-            found
-        );
+        print_url_mismatch(name, expected, found);
     }
 }
 
