@@ -40,6 +40,24 @@ use caxe::tree;
 use caxe::ui;
 use caxe::upgrade;
 
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
+    fn SetConsoleCP(wCodePageID: u32) -> i32;
+}
+
+#[cfg(windows)]
+fn enable_windows_utf8_console() {
+    unsafe {
+        SetConsoleOutputCP(65001);
+        SetConsoleCP(65001);
+    }
+}
+
+#[cfg(not(windows))]
+fn enable_windows_utf8_console() {}
+
 #[derive(Parser)]
 #[command(name = "cx")]
 #[command(about = "The modern C/C++ project manager", version = env!("CARGO_PKG_VERSION"))]
@@ -333,19 +351,7 @@ enum FrameworkOp {
 }
 
 fn main() -> Result<()> {
-    // Set Windows console to UTF-8 mode for proper Unicode output
-    #[cfg(windows)]
-    {
-        unsafe {
-            #[link(name = "kernel32")]
-            unsafe extern "system" {
-                fn SetConsoleOutputCP(wCodePageID: u32) -> i32;
-                fn SetConsoleCP(wCodePageID: u32) -> i32;
-            }
-            SetConsoleOutputCP(65001);
-            SetConsoleCP(65001);
-        }
-    }
+    enable_windows_utf8_console();
 
     let cli = Cli::parse();
 
