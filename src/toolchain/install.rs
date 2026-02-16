@@ -46,16 +46,15 @@ pub fn install_toolchain(name: Option<String>) -> Result<()> {
     }
 }
 
-/// Interactive installation wizard
-fn install_interactive() -> Result<()> {
+fn print_wizard_header() {
     println!();
     println!("{} {}", "🔧".cyan(), "Toolchain Installation Wizard".bold());
     println!("{}", "─".repeat(40).dimmed());
     println!();
+}
 
-    // Question 1: Compiler Toolchain
-    let toolchain_options = get_toolchain_options();
-    let toolchain_choice = Select::new("Select a toolchain to install:", toolchain_options)
+fn run_toolchain_step() -> Result<()> {
+    let toolchain_choice = Select::new("Select a toolchain to install:", get_toolchain_options())
         .with_help_message("Choose a compiler toolchain for your system")
         .prompt()?;
 
@@ -74,14 +73,12 @@ fn install_interactive() -> Result<()> {
             #[cfg(not(windows))]
             println!("{} MSVC is only available on Windows.", "!".yellow());
         }
-        ToolchainChoice::Skip => {
-            println!("{} Skipping toolchain installation.", "→".dimmed());
-        }
+        ToolchainChoice::Skip => println!("{} Skipping toolchain installation.", "→".dimmed()),
     }
+    Ok(())
+}
 
-    println!();
-
-    // Question 2: Build System / Dependency Manager
+fn run_build_tools_step() -> Result<()> {
     let build_system_options = vec![
         "CMake - Cross-platform build system",
         "Ninja - Fast build system",
@@ -123,23 +120,24 @@ fn install_interactive() -> Result<()> {
         _ => println!("{} Skipping build tools.", "→".dimmed()),
     }
 
-    println!();
+    Ok(())
+}
 
-    // Question 3: clang-format
+fn run_clang_format_step() -> Result<()> {
     let install_format = Confirm::new("Install clang-format for code formatting?")
         .with_default(true)
         .with_help_message("Used by 'cx fmt' command")
         .prompt()?;
 
     if install_format {
-        install_clang_format()?;
+        install_clang_format()
     } else {
         println!("{} Skipping clang-format.", "→".dimmed());
+        Ok(())
     }
+}
 
-    println!();
-
-    // Question 4: Additional Development Tools
+fn run_additional_tools_step() -> Result<()> {
     let dev_tools_options = vec![
         "Git - Version control system",
         "Emscripten - WebAssembly/asm.js compiler",
@@ -176,6 +174,20 @@ fn install_interactive() -> Result<()> {
         }
         println!();
     }
+
+    Ok(())
+}
+
+/// Interactive installation wizard
+fn install_interactive() -> Result<()> {
+    print_wizard_header();
+    run_toolchain_step()?;
+    println!();
+    run_build_tools_step()?;
+    println!();
+    run_clang_format_step()?;
+    println!();
+    run_additional_tools_step()?;
 
     println!();
     println!("{} Installation wizard complete!", "✓".green());
@@ -534,6 +546,81 @@ fn extract_zip(archive_path: &Path, target_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
+fn mingw_dir() -> Result<std::path::PathBuf> {
+    let home = dirs::home_dir().context("Could not find home directory")?;
+    Ok(home.join(".cx").join("tools").join("mingw64"))
+}
+
+#[cfg(windows)]
+fn mingw_current_version(mingw_dir: &Path) -> String {
+    let gcc_path = mingw_dir.join("bin").join("g++.exe");
+    if !gcc_path.exists() {
+        return "unknown".to_string();
+    }
+
+    std::process::Command::new(&gcc_path)
+        .arg("--version")
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("unknown")
+                .to_string()
+        })
+        .unwrap_or_else(|_| "unknown".to_string())
+}
+
+#[cfg(windows)]
+fn maybe_update_mingw() -> Result<bool> {
+    let mingw_dir = mingw_dir()?;
+    if !mingw_dir.exists() {
+        println!("{} No caxe-installed toolchains found.", "!".yellow());
+        println!(
+            "   Use {} to install toolchains.",
+            "cx toolchain install".cyan()
+        );
+        return Ok(false);
+    }
+
+    println!(
+        "{} Found installed MinGW at {}",
+        "📦".blue(),
+        mingw_dir.display()
+    );
+    println!(
+        "   Current version: {}",
+        mingw_current_version(&mingw_dir).dimmed()
+    );
+
+    let update = inquire::Confirm::new("Update MinGW to latest version?")
+        .with_default(true)
+        .prompt()?;
+    if !update {
+        return Ok(false);
+    }
+
+    println!("{} Removing old installation...", "🗑️".red());
+    std::fs::remove_dir_all(&mingw_dir)?;
+    install_mingw()?;
+    Ok(true)
+}
+
+#[cfg(not(windows))]
+fn print_non_windows_update_guidance() {
+    println!(
+        "{} Toolchain updates are currently Windows-only.",
+        "!".yellow()
+    );
+    println!("   Use your system package manager to update toolchains:");
+    println!("   - macOS: {}", "brew upgrade gcc llvm".yellow());
+    println!(
+        "   - Ubuntu: {}",
+        "sudo apt update && sudo apt upgrade".yellow()
+    );
+}
+
 /// Update installed toolchains to newer versions
 pub fn update_toolchains() -> Result<()> {
     println!(
@@ -543,77 +630,14 @@ pub fn update_toolchains() -> Result<()> {
     );
     println!();
 
-    let mut updated = false;
-
     #[cfg(windows)]
-    {
-        let home = dirs::home_dir().context("Could not find home directory")?;
-        let tool_dir = home.join(".cx").join("tools");
-        let mingw_dir = tool_dir.join("mingw64");
-
-        // Check if MinGW is installed via caxe
-        if mingw_dir.exists() {
-            println!(
-                "{} Found installed MinGW at {}",
-                "📦".blue(),
-                mingw_dir.display()
-            );
-
-            // Get current version
-            let gcc_path = mingw_dir.join("bin").join("g++.exe");
-            let current_version = if gcc_path.exists() {
-                std::process::Command::new(&gcc_path)
-                    .arg("--version")
-                    .output()
-                    .map(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .next()
-                            .unwrap_or("unknown")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string())
-            } else {
-                "unknown".to_string()
-            };
-            println!("   Current version: {}", current_version.dimmed());
-
-            // Ask user if they want to update
-            let update = inquire::Confirm::new("Update MinGW to latest version?")
-                .with_default(true)
-                .prompt()?;
-
-            if update {
-                // Remove old installation
-                println!("{} Removing old installation...", "🗑️".red());
-                std::fs::remove_dir_all(&mingw_dir)?;
-
-                // Install new version
-                install_mingw()?;
-                updated = true;
-            }
-        } else {
-            println!("{} No caxe-installed toolchains found.", "!".yellow());
-            println!(
-                "   Use {} to install toolchains.",
-                "cx toolchain install".cyan()
-            );
-        }
-    }
+    let updated = maybe_update_mingw()?;
 
     #[cfg(not(windows))]
-    {
-        println!(
-            "{} Toolchain updates are currently Windows-only.",
-            "!".yellow()
-        );
-        println!("   Use your system package manager to update toolchains:");
-        println!("   - macOS: {}", "brew upgrade gcc llvm".yellow());
-        println!(
-            "   - Ubuntu: {}",
-            "sudo apt update && sudo apt upgrade".yellow()
-        );
-    }
+    let updated = false;
+
+    #[cfg(not(windows))]
+    print_non_windows_update_guidance();
 
     if updated {
         println!();

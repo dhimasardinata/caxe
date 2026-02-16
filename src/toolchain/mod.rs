@@ -13,7 +13,7 @@ pub mod install; // Toolchain installer
 
 pub use types::{CompilerType, Toolchain, ToolchainError};
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Detect the best available toolchain for the current platform
 pub fn detect_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, ToolchainError> {
@@ -75,133 +75,158 @@ pub fn get_or_detect_toolchain(
     preferred: Option<CompilerType>,
     force_detect: bool,
 ) -> Result<Toolchain, ToolchainError> {
-    // 1. First, check user selection cache (from `cx toolchain select`)
     let selection_path = get_user_selection_path();
-    if !force_detect
-        && selection_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&selection_path)
-    {
-        // Parse the selection file to get compiler type, path, and source
-        let mut selected_type: Option<CompilerType> = None;
-        let mut selected_path: Option<PathBuf> = None;
-        let mut selected_source: Option<String> = None;
-
-        for line in contents.lines() {
-            if line.starts_with("compiler_type") {
-                if line.contains("\"MSVC\"") {
-                    selected_type = Some(CompilerType::MSVC);
-                } else if line.contains("\"ClangCL\"") {
-                    selected_type = Some(CompilerType::ClangCL);
-                } else if line.contains("\"Clang\"") {
-                    selected_type = Some(CompilerType::Clang);
-                } else if line.contains("\"GCC\"") {
-                    selected_type = Some(CompilerType::GCC);
-                }
-            }
-            if line.starts_with("path") {
-                // Extract path from: path = "C:\..."
-                if let Some(start) = line.find('"')
-                    && let Some(end) = line.rfind('"')
-                    && start < end
-                {
-                    selected_path = Some(PathBuf::from(&line[start + 1..end]));
-                }
-            }
-            if line.starts_with("source") {
-                // Extract source from: source = "Visual Studio Build Tools 2026"
-                if let Some(start) = line.find('"')
-                    && let Some(end) = line.rfind('"')
-                    && start < end
-                {
-                    selected_source = Some(line[start + 1..end].to_string());
-                }
-            }
-        }
-
-        // If user has a selection and it matches any preference (or no preference)
-        if let (Some(sel_type), Some(path)) = (&selected_type, &selected_path) {
-            let matches_preference = match &preferred {
-                None => true,
-                Some(pref) => pref == sel_type,
-            };
-
-            if matches_preference && path.exists() {
-                // For MSVC/ClangCL, need to detect from specific VS installation
-                #[cfg(windows)]
-                {
-                    if let Some(ref source) = selected_source
-                        && let Ok(toolchain) =
-                            windows::detect_toolchain_from_source(sel_type.clone(), source)
-                    {
-                        return Ok(toolchain);
-                    }
-                }
-
-                // For GCC or if source detection fails, try direct path detection
-                if sel_type == &CompilerType::GCC {
-                    let version = std::process::Command::new(path)
-                        .arg("--version")
-                        .output()
-                        .map(|o| {
-                            String::from_utf8_lossy(&o.stdout)
-                                .lines()
-                                .next()
-                                .unwrap_or("unknown")
-                                .to_string()
-                        })
-                        .unwrap_or_else(|_| "unknown".to_string());
-
-                    return Ok(Toolchain {
-                        compiler_type: CompilerType::GCC,
-                        cc_path: path.with_file_name("gcc.exe"),
-                        cxx_path: path.clone(),
-                        linker_path: PathBuf::new(),
-                        version,
-                        msvc_toolset_version: None,
-                        windows_sdk_version: None,
-                        vs_install_path: None,
-                        env_vars: std::collections::HashMap::new(),
-                    });
-                }
-            }
-        }
-    }
-
-    // 2. Fall back to auto-detected cache
     let cache_path = get_toolchain_cache_path();
-
-    // Try to load from cache first
-    if !force_detect
-        && cache_path.exists()
-        && let Ok(contents) = std::fs::read_to_string(&cache_path)
-        && let Ok(cached) = toml::from_str::<Toolchain>(&contents)
+    if let Some(selected) = load_user_selected_toolchain(&preferred, force_detect, &selection_path)
     {
-        // Verify the cached toolchain still exists AND matches preference
-        if cached.cxx_path.exists() {
-            // If user has a preference, cache must match it
-            let matches_preference = match &preferred {
-                None => true, // No preference, any cached toolchain is fine
-                Some(pref) => *pref == cached.compiler_type,
-            };
+        return Ok(selected);
+    }
 
-            if matches_preference {
-                return Ok(cached);
-            }
+    if let Some(cached) = load_cached_toolchain(&preferred, force_detect, &cache_path) {
+        return Ok(cached);
+    }
+
+    let toolchain = detect_toolchain(preferred)?;
+    cache_toolchain(&cache_path, &toolchain);
+    Ok(toolchain)
+}
+
+#[derive(Default)]
+struct ParsedSelection {
+    compiler_type: Option<CompilerType>,
+    path: Option<PathBuf>,
+    source: Option<String>,
+}
+
+fn matches_preference(preferred: &Option<CompilerType>, compiler_type: &CompilerType) -> bool {
+    preferred
+        .as_ref()
+        .map(|pref| pref == compiler_type)
+        .unwrap_or(true)
+}
+
+fn extract_quoted_value(line: &str) -> Option<String> {
+    let start = line.find('"')?;
+    let end = line.rfind('"')?;
+    (start < end).then(|| line[start + 1..end].to_string())
+}
+
+fn parse_user_selection(contents: &str) -> ParsedSelection {
+    let mut parsed = ParsedSelection::default();
+
+    for line in contents.lines() {
+        if line.starts_with("compiler_type") {
+            parsed.compiler_type = match () {
+                _ if line.contains("\"MSVC\"") => Some(CompilerType::MSVC),
+                _ if line.contains("\"ClangCL\"") => Some(CompilerType::ClangCL),
+                _ if line.contains("\"Clang\"") => Some(CompilerType::Clang),
+                _ if line.contains("\"GCC\"") => Some(CompilerType::GCC),
+                _ => None,
+            };
+            continue;
+        }
+
+        if line.starts_with("path") {
+            parsed.path = extract_quoted_value(line).map(PathBuf::from);
+            continue;
+        }
+
+        if line.starts_with("source") {
+            parsed.source = extract_quoted_value(line);
         }
     }
 
-    // 3. Detect fresh toolchain
-    let toolchain = detect_toolchain(preferred)?;
+    parsed
+}
 
-    // Cache it
-    if let Ok(toml_str) = toml::to_string_pretty(&toolchain) {
+fn gcc_toolchain_from_selected_path(path: &Path) -> Toolchain {
+    let version = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .next()
+                .unwrap_or("unknown")
+                .to_string()
+        })
+        .unwrap_or_else(|_| "unknown".to_string());
+
+    Toolchain {
+        compiler_type: CompilerType::GCC,
+        cc_path: path.with_file_name("gcc.exe"),
+        cxx_path: path.to_path_buf(),
+        linker_path: PathBuf::new(),
+        version,
+        msvc_toolset_version: None,
+        windows_sdk_version: None,
+        vs_install_path: None,
+        env_vars: std::collections::HashMap::new(),
+    }
+}
+
+#[cfg(windows)]
+fn toolchain_from_source(selection: &ParsedSelection) -> Option<Toolchain> {
+    let sel_type = selection.compiler_type.clone()?;
+    let source = selection.source.as_ref()?;
+    windows::detect_toolchain_from_source(sel_type, source).ok()
+}
+
+#[cfg(not(windows))]
+fn toolchain_from_source(_selection: &ParsedSelection) -> Option<Toolchain> {
+    None
+}
+
+fn load_user_selected_toolchain(
+    preferred: &Option<CompilerType>,
+    force_detect: bool,
+    selection_path: &Path,
+) -> Option<Toolchain> {
+    if force_detect || !selection_path.exists() {
+        return None;
+    }
+
+    let contents = std::fs::read_to_string(selection_path).ok()?;
+    let selection = parse_user_selection(&contents);
+    let selected_type = selection.compiler_type.as_ref()?;
+    let selected_path = selection.path.as_ref()?;
+
+    if !matches_preference(preferred, selected_type) || !selected_path.exists() {
+        return None;
+    }
+
+    if let Some(toolchain) = toolchain_from_source(&selection) {
+        return Some(toolchain);
+    }
+
+    (selected_type == &CompilerType::GCC).then(|| gcc_toolchain_from_selected_path(selected_path))
+}
+
+fn load_cached_toolchain(
+    preferred: &Option<CompilerType>,
+    force_detect: bool,
+    cache_path: &Path,
+) -> Option<Toolchain> {
+    if force_detect || !cache_path.exists() {
+        return None;
+    }
+
+    let contents = std::fs::read_to_string(cache_path).ok()?;
+    let cached = toml::from_str::<Toolchain>(&contents).ok()?;
+    if cached.cxx_path.exists() && matches_preference(preferred, &cached.compiler_type) {
+        Some(cached)
+    } else {
+        None
+    }
+}
+
+fn cache_toolchain(cache_path: &Path, toolchain: &Toolchain) {
+    if let Ok(toml_str) = toml::to_string_pretty(toolchain) {
         if let Some(parent) = cache_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&cache_path, toml_str);
+        let _ = std::fs::write(cache_path, toml_str);
     }
-
-    Ok(toolchain)
 }
 
 /// Get the path to the user selection file (from `cx toolchain select`)

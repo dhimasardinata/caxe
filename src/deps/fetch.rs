@@ -469,12 +469,19 @@ fn resolve_system_package(pkg_name: &str, state: &mut FetchState) {
 
     let libs_ok = append_pkg_config_flags(pkg_name, "--libs", &mut state.link_flags);
     if !libs_ok {
-        println!("{} Package '{}' not found via pkg-config", "x".red(), pkg_name);
+        println!(
+            "{} Package '{}' not found via pkg-config",
+            "x".red(),
+            pkg_name
+        );
     }
 }
 
 fn append_pkg_config_flags(pkg_name: &str, flag_kind: &str, out: &mut Vec<String>) -> bool {
-    let Ok(output) = Command::new("pkg-config").args([flag_kind, pkg_name]).output() else {
+    let Ok(output) = Command::new("pkg-config")
+        .args([flag_kind, pkg_name])
+        .output()
+    else {
         return false;
     };
     if !output.status.success() {
@@ -501,8 +508,7 @@ fn process_git_dependency(
     let repo = open_or_clone_repo(name, &spec.url, &lib_path, is_vendor)?;
 
     let locked_commit = locked_commit_for(lockfile, name, &spec.url, options.enforce_lock);
-    if let Some((oid, checkout_msg)) =
-        select_checkout_target(&repo, spec, locked_commit.as_deref())
+    if let Some((oid, checkout_msg)) = select_checkout_target(&repo, spec, locked_commit.as_deref())
     {
         checkout_repo_target(&repo, oid, &checkout_msg)?;
     }
@@ -511,7 +517,11 @@ fn process_git_dependency(
     maybe_build_dependency(name, spec, &lib_path)?;
     register_include_paths(&lib_path, state);
     collect_module_files(&lib_path, state);
-    collect_link_outputs(&lib_path, spec.output_file.as_deref(), &mut state.link_flags);
+    collect_link_outputs(
+        &lib_path,
+        spec.output_file.as_deref(),
+        &mut state.link_flags,
+    );
     Ok(())
 }
 
@@ -524,7 +534,12 @@ fn resolve_dependency_path(name: &str, cache_dir: &Path) -> Result<(PathBuf, boo
     }
 }
 
-fn open_or_clone_repo(name: &str, url: &str, lib_path: &Path, is_vendor: bool) -> Result<Repository> {
+fn open_or_clone_repo(
+    name: &str,
+    url: &str,
+    lib_path: &Path,
+    is_vendor: bool,
+) -> Result<Repository> {
     if lib_path.exists() {
         if is_vendor {
             println!("   {} Using vendor: {}", "📦".blue(), name);
@@ -631,11 +646,7 @@ fn find_branch_commit(repo: &Repository, branch: &str) -> Option<git2::Oid> {
 }
 
 fn short_hash(rev: &str) -> &str {
-    if rev.len() > 7 {
-        &rev[..7]
-    } else {
-        rev
-    }
+    if rev.len() > 7 { &rev[..7] } else { rev }
 }
 
 fn checkout_repo_target(repo: &Repository, oid: git2::Oid, checkout_msg: &str) -> Result<()> {

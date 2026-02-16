@@ -18,6 +18,39 @@ const LLVM_PATHS: &[&str] = &[
     r"C:\Program Files (x86)\LLVM\bin",
 ];
 
+fn first_existing_path<I>(paths: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    paths.into_iter().find(|p| p.exists())
+}
+
+fn find_in_llvm_paths(binary: &str) -> Option<PathBuf> {
+    first_existing_path(
+        LLVM_PATHS
+            .iter()
+            .map(|base| PathBuf::from(base).join(binary)),
+    )
+}
+
+#[cfg(windows)]
+fn find_from_llvm_registry(binary: &str) -> Option<PathBuf> {
+    use winreg::RegKey;
+    use winreg::enums::*;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\LLVM\LLVM")
+        .ok()?;
+    let path = hklm.get_value::<String, _>("").ok()?;
+    let candidate = PathBuf::from(path).join("bin").join(binary);
+    candidate.exists().then_some(candidate)
+}
+
+#[cfg(not(windows))]
+fn find_from_llvm_registry(_binary: &str) -> Option<PathBuf> {
+    None
+}
+
 /// Find vswhere.exe on the system
 pub fn find_vswhere() -> Option<PathBuf> {
     for path in VSWHERE_PATHS {
@@ -180,58 +213,12 @@ pub fn find_bundled_clang(vs_path: &Path) -> Option<PathBuf> {
 
 /// Find standalone LLVM installation
 pub fn find_standalone_llvm() -> Option<PathBuf> {
-    for path in LLVM_PATHS {
-        let clang_cl = PathBuf::from(path).join("clang-cl.exe");
-        if clang_cl.exists() {
-            return Some(clang_cl);
-        }
-    }
-
-    // Also check registry (HKLM\SOFTWARE\LLVM\LLVM)
-    #[cfg(windows)]
-    {
-        use winreg::RegKey;
-        use winreg::enums::*;
-
-        if let Ok(hklm) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\LLVM\LLVM")
-            && let Ok(path) = hklm.get_value::<String, _>("")
-        {
-            let clang_cl = PathBuf::from(&path).join("bin").join("clang-cl.exe");
-            if clang_cl.exists() {
-                return Some(clang_cl);
-            }
-        }
-    }
-
-    None
+    find_in_llvm_paths("clang-cl.exe").or_else(|| find_from_llvm_registry("clang-cl.exe"))
 }
 
 /// Find standalone LLVM installation clang++ (not clang-cl)
 pub fn find_standalone_clang() -> Option<PathBuf> {
-    for path in LLVM_PATHS {
-        let clang_pp = PathBuf::from(path).join("clang++.exe");
-        if clang_pp.exists() {
-            return Some(clang_pp);
-        }
-    }
-
-    // Also check registry (HKLM\SOFTWARE\LLVM\LLVM)
-    #[cfg(windows)]
-    {
-        use winreg::RegKey;
-        use winreg::enums::*;
-
-        if let Ok(hklm) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey(r"SOFTWARE\LLVM\LLVM")
-            && let Ok(path) = hklm.get_value::<String, _>("")
-        {
-            let clang_pp = PathBuf::from(&path).join("bin").join("clang++.exe");
-            if clang_pp.exists() {
-                return Some(clang_pp);
-            }
-        }
-    }
-
-    None
+    find_in_llvm_paths("clang++.exe").or_else(|| find_from_llvm_registry("clang++.exe"))
 }
 
 /// Load environment variables from vcvars64.bat
@@ -455,177 +442,26 @@ pub fn detect_toolchain_from_source(
 
 /// Main entry point: detect the best available toolchain
 pub fn detect_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, ToolchainError> {
-    // 1. Detect VS Installations
     let vs_installations = detect_vs_installations().unwrap_or_default();
-
-    // 2. Detect Installed/PATH MinGW
-    let mut mingw_path = None;
-    if let Some(home) = dirs::home_dir() {
-        let p = home
-            .join(".cx")
-            .join("tools")
-            .join("mingw64")
-            .join("bin")
-            .join("g++.exe");
-        if p.exists() {
-            mingw_path = Some(p);
-        }
-    }
-    if mingw_path.is_none() {
-        // Try PATH
-        if let Ok(output) = std::process::Command::new("where").arg("g++").output()
-            && output.status.success()
-            && let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next()
-        {
-            mingw_path = Some(PathBuf::from(line.trim()));
-        }
+    let mingw_path = detect_mingw_path();
+    if let Some(toolchain) = maybe_resolve_without_vs(&preferred, &vs_installations, mingw_path)? {
+        return Ok(toolchain);
     }
 
-    // 3. Selection Logic
-    match preferred {
-        Some(CompilerType::GCC) => {
-            if let Some(gxx) = mingw_path {
-                let version = get_compiler_version(&gxx, false);
-                return Ok(Toolchain {
-                    compiler_type: CompilerType::GCC,
-                    cc_path: gxx.with_file_name("gcc.exe"), // assume gcc next to g++
-                    cxx_path: gxx,
-                    linker_path: PathBuf::new(), // GCC handles linking
-                    version,
-                    msvc_toolset_version: None,
-                    windows_sdk_version: None,
-                    vs_install_path: None,
-                    env_vars: HashMap::new(),
-                });
-            } else {
-                return Err(ToolchainError::NotFound(
-                    "GCC/MinGW not found. Run 'cx toolchain install mingw'.".to_string(),
-                ));
-            }
-        }
-        Some(CompilerType::MSVC) => {
-            if vs_installations.is_empty() {
-                return Err(ToolchainError::NotFound(
-                    "Visual Studio not found.".to_string(),
-                ));
-            }
-        }
-        _ => {
-            // No preference, or Clang/ClangCL.
-            // If VS missing, can we fallback to GCC?
-            if vs_installations.is_empty() {
-                if let Some(gxx) = mingw_path {
-                    println!(
-                        "{} Visual Studio not found, falling back to MinGW.",
-                        "!".yellow()
-                    );
-                    let version = get_compiler_version(&gxx, false);
-                    return Ok(Toolchain {
-                        compiler_type: CompilerType::GCC,
-                        cc_path: gxx.with_file_name("gcc.exe"),
-                        cxx_path: gxx,
-                        linker_path: PathBuf::new(),
-                        version,
-                        msvc_toolset_version: None,
-                        windows_sdk_version: None,
-                        vs_install_path: None,
-                        env_vars: HashMap::new(),
-                    });
-                }
-                return Err(ToolchainError::NotFound(
-                    "No suitable compiler found (VS or MinGW).".to_string(),
-                ));
-            }
-        }
-    }
-
-    // VS is present if we got here (unless we returned GCC)
     let vs = &vs_installations[0];
-
-    // Load vcvars environment
     let env_vars = load_vcvars_env(&vs.install_path)?;
-
-    // Find MSVC toolset
     let (toolset_path, toolset_version) = find_msvc_toolset(&vs.install_path).ok_or_else(|| {
         ToolchainError::NotFound("MSVC toolset not found in VS installation".to_string())
     })?;
-
-    // Get Windows SDK version from env
     let windows_sdk_version = env_vars.get("WINDOWSSDKVERSION").cloned();
+    let (compiler_type, cxx_path, cc_path) =
+        select_vs_compiler(&preferred, &vs_installations, &toolset_path)?;
 
-    // Decide which compiler to use based on preference
-    let (compiler_type, cxx_path, cc_path) = match preferred {
-        Some(CompilerType::ClangCL) => {
-            // Try bundled clang-cl in ALL VS installations, then standalone
-            let mut clang_cl_path = None;
-
-            // Search all VS installations for clang-cl
-            for vs_inst in &vs_installations {
-                if let Some(path) = find_bundled_clang_cl(&vs_inst.install_path) {
-                    clang_cl_path = Some(path);
-                    break;
-                }
-            }
-
-            // Try standalone LLVM if not found in VS
-            if clang_cl_path.is_none() {
-                clang_cl_path = find_standalone_llvm();
-            }
-
-            if let Some(clang_cl) = clang_cl_path {
-                (CompilerType::ClangCL, clang_cl.clone(), clang_cl)
-            } else {
-                // Fallback to MSVC
-                let cl = find_cl_exe(&toolset_path)
-                    .ok_or_else(|| ToolchainError::NotFound("cl.exe not found".to_string()))?;
-                (CompilerType::MSVC, cl.clone(), cl)
-            }
-        }
-        Some(CompilerType::MSVC) | None => {
-            // Use MSVC (default)
-            let cl = find_cl_exe(&toolset_path)
-                .ok_or_else(|| ToolchainError::NotFound("cl.exe not found".to_string()))?;
-            (CompilerType::MSVC, cl.clone(), cl)
-        }
-        Some(CompilerType::Clang) => {
-            // Try bundled clang++ in ALL VS installations, then standalone LLVM
-            let mut clang_path = None;
-
-            // First try standalone LLVM (user explicitly installed it, may prefer it)
-            if let Some(path) = find_standalone_clang() {
-                clang_path = Some(path);
-            }
-
-            // Then search VS installations for bundled clang++
-            if clang_path.is_none() {
-                for vs_inst in &vs_installations {
-                    if let Some(path) = find_bundled_clang(&vs_inst.install_path) {
-                        clang_path = Some(path);
-                        break;
-                    }
-                }
-            }
-
-            if let Some(clang) = clang_path {
-                let cc_path = clang.with_file_name("clang.exe");
-                (CompilerType::Clang, clang, cc_path)
-            } else {
-                // Fallback to MSVC
-                let cl = find_cl_exe(&toolset_path)
-                    .ok_or_else(|| ToolchainError::NotFound("cl.exe not found".to_string()))?;
-                (CompilerType::MSVC, cl.clone(), cl)
-            }
-        }
-        Some(CompilerType::GCC) => unreachable!(), // Handled above
-    };
-
-    // Get linker path (link.exe for MSVC-compatible)
     let linker_path = toolset_path
         .join("bin")
         .join("Hostx64")
         .join("x64")
         .join("link.exe");
-
     let version = get_compiler_version(&cxx_path, compiler_type == CompilerType::MSVC);
 
     Ok(Toolchain {
@@ -639,6 +475,132 @@ pub fn detect_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, To
         vs_install_path: Some(vs.install_path.clone()),
         env_vars,
     })
+}
+
+fn detect_mingw_path() -> Option<PathBuf> {
+    if let Some(home) = dirs::home_dir() {
+        let installed = home
+            .join(".cx")
+            .join("tools")
+            .join("mingw64")
+            .join("bin")
+            .join("g++.exe");
+        if installed.exists() {
+            return Some(installed);
+        }
+    }
+
+    if let Ok(output) = Command::new("where").arg("g++").output()
+        && output.status.success()
+        && let Some(line) = String::from_utf8_lossy(&output.stdout).lines().next()
+    {
+        return Some(PathBuf::from(line.trim()));
+    }
+
+    None
+}
+
+fn gcc_toolchain(gxx: PathBuf) -> Toolchain {
+    let version = get_compiler_version(&gxx, false);
+    Toolchain {
+        compiler_type: CompilerType::GCC,
+        cc_path: gxx.with_file_name("gcc.exe"),
+        cxx_path: gxx,
+        linker_path: PathBuf::new(),
+        version,
+        msvc_toolset_version: None,
+        windows_sdk_version: None,
+        vs_install_path: None,
+        env_vars: HashMap::new(),
+    }
+}
+
+fn maybe_resolve_without_vs(
+    preferred: &Option<CompilerType>,
+    vs_installations: &[VSInstallation],
+    mingw_path: Option<PathBuf>,
+) -> Result<Option<Toolchain>, ToolchainError> {
+    match preferred {
+        Some(CompilerType::GCC) => mingw_path.map(gcc_toolchain).map(Some).ok_or_else(|| {
+            ToolchainError::NotFound(
+                "GCC/MinGW not found. Run 'cx toolchain install mingw'.".to_string(),
+            )
+        }),
+        Some(CompilerType::MSVC) => {
+            if vs_installations.is_empty() {
+                Err(ToolchainError::NotFound(
+                    "Visual Studio not found.".to_string(),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => {
+            if !vs_installations.is_empty() {
+                return Ok(None);
+            }
+            if let Some(gxx) = mingw_path {
+                println!(
+                    "{} Visual Studio not found, falling back to MinGW.",
+                    "!".yellow()
+                );
+                Ok(Some(gcc_toolchain(gxx)))
+            } else {
+                Err(ToolchainError::NotFound(
+                    "No suitable compiler found (VS or MinGW).".to_string(),
+                ))
+            }
+        }
+    }
+}
+
+fn find_first_bundled_clang_cl(vs_installations: &[VSInstallation]) -> Option<PathBuf> {
+    vs_installations
+        .iter()
+        .find_map(|vs| find_bundled_clang_cl(&vs.install_path))
+}
+
+fn find_first_bundled_clang(vs_installations: &[VSInstallation]) -> Option<PathBuf> {
+    vs_installations
+        .iter()
+        .find_map(|vs| find_bundled_clang(&vs.install_path))
+}
+
+fn msvc_compiler(toolset_path: &Path) -> Result<(CompilerType, PathBuf, PathBuf), ToolchainError> {
+    let cl = find_cl_exe(toolset_path)
+        .ok_or_else(|| ToolchainError::NotFound("cl.exe not found".to_string()))?;
+    Ok((CompilerType::MSVC, cl.clone(), cl))
+}
+
+fn select_vs_compiler(
+    preferred: &Option<CompilerType>,
+    vs_installations: &[VSInstallation],
+    toolset_path: &Path,
+) -> Result<(CompilerType, PathBuf, PathBuf), ToolchainError> {
+    match preferred {
+        Some(CompilerType::ClangCL) => {
+            let clang_cl = find_first_bundled_clang_cl(vs_installations)
+                .or_else(find_standalone_llvm)
+                .map(|path| (CompilerType::ClangCL, path.clone(), path));
+            clang_cl
+                .map(Ok)
+                .unwrap_or_else(|| msvc_compiler(toolset_path))
+        }
+        Some(CompilerType::Clang) => {
+            let clang = find_standalone_clang()
+                .or_else(|| find_first_bundled_clang(vs_installations))
+                .map(|path| {
+                    (
+                        CompilerType::Clang,
+                        path.clone(),
+                        path.with_file_name("clang.exe"),
+                    )
+                });
+            clang.map(Ok).unwrap_or_else(|| msvc_compiler(toolset_path))
+        }
+        Some(CompilerType::GCC) => unreachable!(),
+        Some(CompilerType::MSVC) | None => msvc_compiler(toolset_path),
+    }
 }
 
 /// Represents an available toolchain option for interactive selection
@@ -664,74 +626,97 @@ impl std::fmt::Display for AvailableToolchain {
 /// Discover all available toolchains on the system
 pub fn discover_all_toolchains() -> Vec<AvailableToolchain> {
     let mut toolchains = Vec::new();
+    add_vs_toolchains(&mut toolchains);
+    add_standalone_llvm_toolchains(&mut toolchains);
+    add_installed_mingw_toolchain(&mut toolchains);
+    add_path_mingw_toolchain(&mut toolchains);
+    toolchains
+}
 
-    // 1. Find all VS installations and their compilers
+fn push_toolchain(
+    toolchains: &mut Vec<AvailableToolchain>,
+    display_name: &str,
+    compiler_type: CompilerType,
+    path: PathBuf,
+    source: String,
+    is_msvc: bool,
+) {
+    let version = get_compiler_version(&path, is_msvc);
+    toolchains.push(AvailableToolchain {
+        display_name: display_name.to_string(),
+        compiler_type,
+        path,
+        version,
+        source,
+    });
+}
+
+fn add_vs_toolchains(toolchains: &mut Vec<AvailableToolchain>) {
     if let Ok(vs_installations) = detect_vs_installations() {
         for vs in &vs_installations {
-            // MSVC (cl.exe)
             if let Some((toolset_path, _version)) = find_msvc_toolset(&vs.install_path)
                 && let Some(cl) = find_cl_exe(&toolset_path)
             {
-                let version = get_compiler_version(&cl, true);
-                toolchains.push(AvailableToolchain {
-                    display_name: "MSVC (cl.exe)".to_string(),
-                    compiler_type: CompilerType::MSVC,
-                    path: cl,
-                    version,
-                    source: vs.display_name.clone(),
-                });
+                push_toolchain(
+                    toolchains,
+                    "MSVC (cl.exe)",
+                    CompilerType::MSVC,
+                    cl,
+                    vs.display_name.clone(),
+                    true,
+                );
             }
 
-            // Bundled Clang-CL
             if let Some(clang_cl) = find_bundled_clang_cl(&vs.install_path) {
-                let version = get_compiler_version(&clang_cl, false);
-                toolchains.push(AvailableToolchain {
-                    display_name: "Clang-CL (clang-cl.exe)".to_string(),
-                    compiler_type: CompilerType::ClangCL,
-                    path: clang_cl,
-                    version,
-                    source: format!("{} bundled", vs.display_name),
-                });
+                push_toolchain(
+                    toolchains,
+                    "Clang-CL (clang-cl.exe)",
+                    CompilerType::ClangCL,
+                    clang_cl,
+                    format!("{} bundled", vs.display_name),
+                    false,
+                );
             }
 
-            // Bundled Clang++
             if let Some(clang) = find_bundled_clang(&vs.install_path) {
-                let version = get_compiler_version(&clang, false);
-                toolchains.push(AvailableToolchain {
-                    display_name: "Clang (clang++.exe)".to_string(),
-                    compiler_type: CompilerType::Clang,
-                    path: clang,
-                    version,
-                    source: format!("{} bundled", vs.display_name),
-                });
+                push_toolchain(
+                    toolchains,
+                    "Clang (clang++.exe)",
+                    CompilerType::Clang,
+                    clang,
+                    format!("{} bundled", vs.display_name),
+                    false,
+                );
             }
         }
     }
+}
 
-    // 2. Standalone LLVM
+fn add_standalone_llvm_toolchains(toolchains: &mut Vec<AvailableToolchain>) {
     if let Some(clang_cl) = find_standalone_llvm() {
-        let version = get_compiler_version(&clang_cl, false);
-        toolchains.push(AvailableToolchain {
-            display_name: "Clang-CL (clang-cl.exe)".to_string(),
-            compiler_type: CompilerType::ClangCL,
-            path: clang_cl,
-            version,
-            source: "Standalone LLVM".to_string(),
-        });
+        push_toolchain(
+            toolchains,
+            "Clang-CL (clang-cl.exe)",
+            CompilerType::ClangCL,
+            clang_cl,
+            "Standalone LLVM".to_string(),
+            false,
+        );
     }
 
     if let Some(clang) = find_standalone_clang() {
-        let version = get_compiler_version(&clang, false);
-        toolchains.push(AvailableToolchain {
-            display_name: "Clang (clang++.exe)".to_string(),
-            compiler_type: CompilerType::Clang,
-            path: clang,
-            version,
-            source: "Standalone LLVM".to_string(),
-        });
+        push_toolchain(
+            toolchains,
+            "Clang (clang++.exe)",
+            CompilerType::Clang,
+            clang,
+            "Standalone LLVM".to_string(),
+            false,
+        );
     }
+}
 
-    // 3. Installed MinGW (via caxe)
+fn add_installed_mingw_toolchain(toolchains: &mut Vec<AvailableToolchain>) {
     if let Some(home) = dirs::home_dir() {
         let mingw_bin = home
             .join(".cx")
@@ -740,51 +725,52 @@ pub fn discover_all_toolchains() -> Vec<AvailableToolchain> {
             .join("bin")
             .join("g++.exe");
         if mingw_bin.exists() {
-            let version = get_compiler_version(&mingw_bin, false);
-            toolchains.push(AvailableToolchain {
-                display_name: "GCC (g++.exe)".to_string(),
-                compiler_type: CompilerType::GCC,
-                path: mingw_bin,
-                version,
-                source: "Max/MinGW (WinLibs)".to_string(),
-            });
+            push_toolchain(
+                toolchains,
+                "GCC (g++.exe)",
+                CompilerType::GCC,
+                mingw_bin,
+                "Max/MinGW (WinLibs)".to_string(),
+                false,
+            );
         }
     }
+}
 
-    // 4. GCC from PATH (MSYS2/MinGW)
-    if let Ok(output) = std::process::Command::new("where").arg("g++").output()
+fn path_source_label(path_line: &str) -> &'static str {
+    if path_line.contains("msys64") {
+        "MSYS2/MinGW"
+    } else if path_line.contains("mingw") {
+        "MinGW"
+    } else {
+        "PATH"
+    }
+}
+
+fn add_path_mingw_toolchain(toolchains: &mut Vec<AvailableToolchain>) {
+    if let Ok(output) = Command::new("where").arg("g++").output()
         && output.status.success()
     {
         let paths = String::from_utf8_lossy(&output.stdout);
         for line in paths.lines() {
             let path = PathBuf::from(line.trim());
-            // Avoid duplicates if PATH includes the installed one
             if toolchains.iter().any(|t| t.path == path) {
                 continue;
             }
 
             if path.exists() {
-                let version = get_compiler_version(&path, false);
-                let source = if line.contains("msys64") {
-                    "MSYS2/MinGW"
-                } else if line.contains("mingw") {
-                    "MinGW"
-                } else {
-                    "PATH"
-                };
-                toolchains.push(AvailableToolchain {
-                    display_name: "GCC (g++.exe)".to_string(),
-                    compiler_type: CompilerType::GCC,
+                push_toolchain(
+                    toolchains,
+                    "GCC (g++.exe)",
+                    CompilerType::GCC,
                     path,
-                    version,
-                    source: source.to_string(),
-                });
-                break; // Only take first g++ found
+                    path_source_label(line).to_string(),
+                    false,
+                );
+                break;
             }
         }
     }
-
-    toolchains
 }
 
 #[cfg(test)]

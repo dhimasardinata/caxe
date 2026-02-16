@@ -122,6 +122,109 @@ fn print_lock_comparison(comparison: &LockComparison) {
     }
 }
 
+fn exit_with_error(message: &str) -> ! {
+    eprintln!("{}", message);
+    std::process::exit(1);
+}
+
+fn load_config_or_exit() -> CxConfig {
+    build::load_config()
+        .unwrap_or_else(|e| exit_with_error(&format!("Error loading config: {}", e)))
+}
+
+fn load_lockfile_or_exit() -> lock::LockFile {
+    lock::LockFile::load()
+        .unwrap_or_else(|e| exit_with_error(&format!("Error loading lockfile: {}", e)))
+}
+
+fn ensure_lockfile_is_clean_or_exit(config: &CxConfig, lockfile: &lock::LockFile, message: &str) {
+    let comparison = compare_lockfile(config, lockfile);
+    if comparison.is_clean() {
+        return;
+    }
+    print_lock_comparison(&comparison);
+    exit_with_error(message);
+}
+
+fn refresh_empty_lockfile_or_exit() {
+    let empty = lock::LockFile::default();
+    if let Err(e) = empty.save() {
+        exit_with_error(&format!("Error writing lockfile: {}", e));
+    }
+    println!("{} Lockfile refreshed (no git dependencies).", "✓".green());
+}
+
+fn update_dependencies_or_exit() {
+    if let Err(e) = deps::update_dependencies() {
+        exit_with_error(&format!("Error updating dependencies: {}", e));
+    }
+}
+
+fn run_lock_check() {
+    println!("{} Verifying lockfile...", "🔒".blue());
+    let lockfile = load_lockfile_or_exit();
+    let config = load_config_or_exit();
+    ensure_lockfile_is_clean_or_exit(
+        &config,
+        &lockfile,
+        &format!(
+            "{} Lockfile out of sync. Run 'cx lock --update'.",
+            "x".red()
+        ),
+    );
+    println!("{} Lockfile is in sync.", "✓".green());
+}
+
+fn run_lock_update() {
+    println!("{} Updating lockfile...", "🔄".blue());
+    let config = load_config_or_exit();
+
+    if config_git_dependencies(&config).is_empty() {
+        refresh_empty_lockfile_or_exit();
+        return;
+    }
+
+    update_dependencies_or_exit();
+    let lockfile = lock::LockFile::load()
+        .unwrap_or_else(|e| exit_with_error(&format!("Error loading updated lockfile: {}", e)));
+
+    ensure_lockfile_is_clean_or_exit(
+        &config,
+        &lockfile,
+        &format!("{} Lockfile update incomplete.", "x".red()),
+    );
+    println!("{} Lockfile updated.", "✓".green());
+}
+
+fn sync_with_lockfile_or_exit(config: &CxConfig) {
+    let lockfile = load_lockfile_or_exit();
+    ensure_lockfile_is_clean_or_exit(
+        config,
+        &lockfile,
+        &format!(
+            "{} Refusing to sync: lockfile is out of sync. Run 'cx lock --update' first.",
+            "x".red()
+        ),
+    );
+}
+
+fn fetch_dependencies_for_sync_or_exit(config: CxConfig) {
+    let Some(deps) = config.dependencies else {
+        println!("No dependencies found in cx.toml.");
+        return;
+    };
+
+    if deps.is_empty() {
+        println!("No dependencies found in cx.toml.");
+        return;
+    }
+
+    match deps::fetch_dependencies(&deps) {
+        Ok(_) => println!("{} Dependencies synchronized.", "✓".green()),
+        Err(e) => exit_with_error(&format!("Error synchronizing: {}", e)),
+    }
+}
+
 /// Run the `cx doctor` command to diagnose system issues
 pub fn run_doctor() -> Result<()> {
     println!("{} Running System Doctor...", "🚑".red());
@@ -177,77 +280,16 @@ pub fn run_doctor() -> Result<()> {
 /// Handle the `cx lock` command for managing lockfiles
 pub fn handle_lock(update: bool, check: bool) {
     if check {
-        println!("{} Verifying lockfile...", "🔒".blue());
-        match lock::LockFile::load() {
-            Ok(lockfile) => match build::load_config() {
-                Ok(config) => {
-                    let comparison = compare_lockfile(&config, &lockfile);
-                    if comparison.is_clean() {
-                        println!("{} Lockfile is in sync.", "✓".green());
-                    } else {
-                        print_lock_comparison(&comparison);
-                        println!(
-                            "{} Lockfile out of sync. Run 'cx lock --update'.",
-                            "x".red()
-                        );
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error loading config: {}", e);
-                    std::process::exit(1);
-                }
-            },
-            Err(e) => {
-                eprintln!("Error loading lockfile: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else if update {
-        println!("{} Updating lockfile...", "🔄".blue());
-        let config = match build::load_config() {
-            Ok(cfg) => cfg,
-            Err(e) => {
-                eprintln!("Error loading config: {}", e);
-                std::process::exit(1);
-            }
-        };
-
-        let has_git_deps = !config_git_dependencies(&config).is_empty();
-        if !has_git_deps {
-            let empty = lock::LockFile::default();
-            if let Err(e) = empty.save() {
-                eprintln!("Error writing lockfile: {}", e);
-                std::process::exit(1);
-            }
-            println!("{} Lockfile refreshed (no git dependencies).", "✓".green());
-            return;
-        }
-
-        if let Err(e) = deps::update_dependencies() {
-            eprintln!("Error updating dependencies: {}", e);
-            std::process::exit(1);
-        }
-
-        match lock::LockFile::load() {
-            Ok(lockfile) => {
-                let comparison = compare_lockfile(&config, &lockfile);
-                if comparison.is_clean() {
-                    println!("{} Lockfile updated.", "✓".green());
-                } else {
-                    print_lock_comparison(&comparison);
-                    eprintln!("{} Lockfile update incomplete.", "x".red());
-                    std::process::exit(1);
-                }
-            }
-            Err(e) => {
-                eprintln!("Error loading updated lockfile: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        println!("Use --check to verify or --update to update/regenerate.");
+        run_lock_check();
+        return;
     }
+
+    if update {
+        run_lock_update();
+        return;
+    }
+
+    println!("Use --check to verify or --update to update/regenerate.");
 }
 
 /// Handle the `cx sync` command for synchronizing dependencies
@@ -257,47 +299,9 @@ pub fn handle_sync() {
         "📦".blue()
     );
 
-    let config = match build::load_config() {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("Error loading config: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let lockfile = match lock::LockFile::load() {
-        Ok(lockfile) => lockfile,
-        Err(e) => {
-            eprintln!("Error loading lockfile: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let comparison = compare_lockfile(&config, &lockfile);
-    if !comparison.is_clean() {
-        print_lock_comparison(&comparison);
-        eprintln!(
-            "{} Refusing to sync: lockfile is out of sync. Run 'cx lock --update' first.",
-            "x".red()
-        );
-        std::process::exit(1);
-    }
-
-    if let Some(deps) = config.dependencies {
-        if deps.is_empty() {
-            println!("No dependencies found in cx.toml.");
-            return;
-        }
-        match deps::fetch_dependencies(&deps) {
-            Ok(_) => println!("{} Dependencies synchronized.", "✓".green()),
-            Err(e) => {
-                eprintln!("Error synchronizing: {}", e);
-                std::process::exit(1);
-            }
-        }
-    } else {
-        println!("No dependencies found in cx.toml.");
-    }
+    let config = load_config_or_exit();
+    sync_with_lockfile_or_exit(&config);
+    fetch_dependencies_for_sync_or_exit(config);
 }
 
 #[cfg(test)]

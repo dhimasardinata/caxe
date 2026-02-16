@@ -14,18 +14,10 @@ use anyhow::{Context, Result};
 use colored::*;
 use serde_json::json;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-pub fn generate_ide_config() -> Result<()> {
-    println!("{} Setting up IDE configuration (VSCode)...", "⚙️".cyan());
-
-    let vscode_dir = Path::new(".vscode");
-    if !vscode_dir.exists() {
-        fs::create_dir(vscode_dir).context("Failed to create .vscode directory")?;
-    }
-
-    // Load config to know binary name
-    let config = crate::build::load_config().unwrap_or_else(|_| CxConfig {
+fn default_config() -> CxConfig {
+    CxConfig {
         package: crate::config::PackageConfig {
             name: "app".to_string(),
             version: "0.1.0".to_string(),
@@ -38,15 +30,30 @@ pub fn generate_ide_config() -> Result<()> {
         workspace: None,
         arduino: None,
         profiles: std::collections::HashMap::new(),
-    });
+    }
+}
 
-    let debug_bin_rel = crate::build::artifact_bin_path(&config, false, false)
+fn load_or_default_config() -> CxConfig {
+    crate::build::load_config().unwrap_or_else(|_| default_config())
+}
+
+fn ensure_vscode_dir() -> Result<PathBuf> {
+    let vscode_dir = PathBuf::from(".vscode");
+    if !vscode_dir.exists() {
+        fs::create_dir(&vscode_dir).context("Failed to create .vscode directory")?;
+    }
+    Ok(vscode_dir)
+}
+
+fn debug_binary_path(config: &CxConfig) -> String {
+    let debug_bin_rel = crate::build::artifact_bin_path(config, false, false)
         .to_string_lossy()
         .replace('\\', "/");
-    let bin_path_debug = format!("${{workspaceFolder}}/{}", debug_bin_rel);
+    format!("${{workspaceFolder}}/{}", debug_bin_rel)
+}
 
-    // 1. tasks.json
-    let tasks_json = json!({
+fn tasks_json() -> serde_json::Value {
+    json!({
         "version": "2.0.0",
         "tasks": [
             {
@@ -74,11 +81,11 @@ pub fn generate_ide_config() -> Result<()> {
                 "problemMatcher": []
             }
         ]
-    });
-    write_json_if_missing(&vscode_dir.join("tasks.json"), &tasks_json)?;
+    })
+}
 
-    // 2. launch.json
-    let launch_json = json!({
+fn launch_json(bin_path_debug: &str) -> serde_json::Value {
+    json!({
         "version": "0.2.0",
         "configurations": [
             {
@@ -94,17 +101,10 @@ pub fn generate_ide_config() -> Result<()> {
                 "preLaunchTask": "Build Debug"
             }
         ]
-    });
-    // Adjust type for non-windows if needed, but for now assuming user OS (Windows) from metadata
-    // Or better, logic to detect or provide both?
-    // Let's provide a generic configuration or one aimed at the current OS.
-    // User is on Windows (MSVC usually), so `cppvsdbg` is safer. `cppdbg` (GDB) requires setup.
-    write_json_if_missing(&vscode_dir.join("launch.json"), &launch_json)?;
+    })
+}
 
-    // 3. c_cpp_properties.json (IntelliSense)
-    // We can try to infer include paths.
-    // Global cache: ~/.cx/cache
-    // Vendor: ./vendor
+fn cpp_properties_json() -> serde_json::Value {
     let home_dir = dirs::home_dir().unwrap_or_else(|| Path::new(".").to_path_buf());
     let cache_dir = home_dir
         .join(".cx")
@@ -112,7 +112,7 @@ pub fn generate_ide_config() -> Result<()> {
         .to_string_lossy()
         .replace("\\", "/");
 
-    let cpp_properties = json!({
+    json!({
         "configurations": [
             {
                 "name": "Win32",
@@ -135,8 +135,25 @@ pub fn generate_ide_config() -> Result<()> {
             }
         ],
         "version": 4
-    });
-    write_json_if_missing(&vscode_dir.join("c_cpp_properties.json"), &cpp_properties)?;
+    })
+}
+
+pub fn generate_ide_config() -> Result<()> {
+    println!("{} Setting up IDE configuration (VSCode)...", "⚙️".cyan());
+
+    let vscode_dir = ensure_vscode_dir()?;
+    let config = load_or_default_config();
+    let bin_path_debug = debug_binary_path(&config);
+
+    write_json_if_missing(&vscode_dir.join("tasks.json"), &tasks_json())?;
+    write_json_if_missing(
+        &vscode_dir.join("launch.json"),
+        &launch_json(&bin_path_debug),
+    )?;
+    write_json_if_missing(
+        &vscode_dir.join("c_cpp_properties.json"),
+        &cpp_properties_json(),
+    )?;
 
     println!("{} VSCode configuration generated in .vscode/", "✓".green());
     Ok(())
