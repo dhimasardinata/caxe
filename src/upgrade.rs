@@ -15,6 +15,7 @@ use semver::Version;
 use serde::Deserialize;
 use std::env;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 const REPO_OWNER: &str = "dhimasardinata";
 const REPO_NAME: &str = "caxe";
@@ -104,7 +105,7 @@ pub fn check_and_upgrade() -> Result<()> {
     pb.set_message("Downloading...");
 
     let mut reader = agent.body_mut().as_reader();
-    let current_exe = env::current_exe()?;
+    let current_exe = resolve_current_binary_path()?;
     let tmp_exe = current_exe.with_extension("tmp");
     let mut tmp_file = fs::File::create(&tmp_exe)?;
 
@@ -149,6 +150,61 @@ pub fn check_and_upgrade() -> Result<()> {
 
     println!("{} Successfully upgraded to v{}!", "✓".green(), remote_ver);
     Ok(())
+}
+
+fn resolve_current_binary_path() -> Result<PathBuf> {
+    let arg0 = env::args_os()
+        .next()
+        .context("Failed to determine current executable from argv[0]")?;
+    let mut candidate = PathBuf::from(arg0);
+
+    if is_valid_executable_path(&candidate) {
+        return Ok(normalize_existing_path(candidate));
+    }
+
+    if candidate.components().count() > 1 {
+        let relative = env::current_dir()?.join(&candidate);
+        if is_valid_executable_path(&relative) {
+            return Ok(normalize_existing_path(relative));
+        }
+    }
+
+    let file_name = candidate
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .context("Invalid executable name in argv[0]")?;
+    candidate = PathBuf::from(file_name);
+
+    if let Some(paths) = env::var_os("PATH") {
+        for dir in env::split_paths(&paths) {
+            let direct = dir.join(&candidate);
+            if is_valid_executable_path(&direct) {
+                return Ok(normalize_existing_path(direct));
+            }
+
+            #[cfg(windows)]
+            {
+                if candidate.extension().is_none() {
+                    let exe = dir.join(candidate.with_extension("exe"));
+                    if is_valid_executable_path(&exe) {
+                        return Ok(normalize_existing_path(exe));
+                    }
+                }
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Could not locate current executable path for self-upgrade"
+    ))
+}
+
+fn is_valid_executable_path(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn normalize_existing_path(path: PathBuf) -> PathBuf {
+    path.canonicalize().unwrap_or(path)
 }
 
 fn get_target_name() -> &'static str {
