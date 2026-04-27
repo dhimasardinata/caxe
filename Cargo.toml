@@ -15,30 +15,30 @@ name = "cx"
 path = "src/main.rs"
 
 [dependencies]
-anyhow = "1.0.100"
-clap = { version = "4.5.56", features = ["derive"] }
-clap_complete = "4.5.65"
+anyhow = "1.0.102"
+clap = { version = "4.5.60", features = ["derive"] }
+clap_complete = "4.6.3"
 colored = "3.1.1"
-console = "0.16.2"
+console = "0.16.3"
 dirs = "6.0.0"
 git2 = { version = "0.20.4", features = ["vendored-openssl"] }
-indicatif = "0.18.3"
-inquire = "0.9.2"
+indicatif = "0.18.4"
+inquire = "0.9.4"
 notify = "8.2.0"
-rayon = "1.11.0"
+rayon = "1.12.0"
 rhai = "1.24.0"
-semver = "1.0.27"
+semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
-toml = "0.9.11"
-ureq = { version = "3.1", features = ["json"] }
+toml = "1.1.2"
+ureq = { version = "3.3", features = ["json"] }
 walkdir = "2.5.0"
-regex = "1.10"
-sha2 = "0.10"
-zip = "7.2.0"
+regex = "1.12"
+sha2 = "0.11"
+zip = "8.6.0"
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.55"
+winreg = "0.56"
 
 [dev-dependencies]
 criterion = "0.8"
