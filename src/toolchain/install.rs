@@ -9,12 +9,18 @@
 //! - Clang/LLVM - Portable LLVM toolchain
 //! - Arduino CLI - For embedded development
 
-use anyhow::{Context, Result};
+#[cfg(windows)]
+use anyhow::Context;
+use anyhow::Result;
 use colored::*;
+#[cfg(windows)]
 use indicatif::{ProgressBar, ProgressStyle};
 use inquire::{Confirm, Select};
+#[cfg(windows)]
 use std::fs::File;
+#[cfg(windows)]
 use std::io::{Read, Write};
+#[cfg(windows)]
 use std::path::Path;
 
 /// Toolchain installation options

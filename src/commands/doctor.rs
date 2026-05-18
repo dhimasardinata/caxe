@@ -10,6 +10,7 @@ use crate::build;
 use crate::config::{CxConfig, Dependency};
 use crate::deps;
 use crate::lock;
+#[cfg(windows)]
 use crate::toolchain;
 
 #[derive(Debug, Default, PartialEq, Eq)]

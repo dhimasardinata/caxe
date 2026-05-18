@@ -19,7 +19,9 @@ use clap_complete::{Shell, generate};
 use colored::*;
 use inquire::{Select, Text};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 use caxe::build;
 use caxe::cache;
@@ -35,6 +37,7 @@ use caxe::package;
 use caxe::registry;
 use caxe::stats;
 use caxe::templates;
+#[cfg(windows)]
 use caxe::toolchain;
 use caxe::tree;
 use caxe::ui;

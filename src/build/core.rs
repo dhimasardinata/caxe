@@ -629,7 +629,12 @@ pub fn build_project(config: &CxConfig, options: &BuildOptions) -> Result<bool> 
     let compiler = if wasm {
         "em++".to_string()
     } else if let Some(ref tc) = toolchain {
-        tc.cxx_path.to_string_lossy().to_string()
+        let compiler = if has_cpp {
+            tc.get_cxx_compiler()
+        } else {
+            tc.get_cc_compiler()
+        };
+        compiler.to_string_lossy().to_string()
     } else {
         get_compiler(config, has_cpp)
     };

@@ -42,26 +42,26 @@ fn detect_unix_toolchain(preferred: Option<CompilerType>) -> Result<Toolchain, T
     };
 
     for (cmd, compiler_type) in compilers {
-        if let Ok(output) = Command::new("which").arg(cmd).output() {
-            if output.status.success() {
-                let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let cxx_path = PathBuf::from(&path_str);
+        if let Ok(output) = Command::new("which").arg(cmd).output()
+            && output.status.success()
+        {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let cxx_path = PathBuf::from(&path_str);
 
-                // Get version
-                let version = Command::new(cmd)
-                    .arg("--version")
-                    .output()
-                    .map(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .next()
-                            .unwrap_or("unknown")
-                            .to_string()
-                    })
-                    .unwrap_or_else(|_| "unknown".to_string());
+            // Get version
+            let version = Command::new(cmd)
+                .arg("--version")
+                .output()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .next()
+                        .unwrap_or("unknown")
+                        .to_string()
+                })
+                .unwrap_or_else(|_| "unknown".to_string());
 
-                return Ok(Toolchain::new_simple(compiler_type, cxx_path, version));
-            }
+            return Ok(Toolchain::new_simple(compiler_type, cxx_path, version));
         }
     }
 

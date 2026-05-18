@@ -4,11 +4,16 @@
 
 use anyhow::Result;
 use colored::*;
+#[cfg(windows)]
 use inquire::Select;
+#[cfg(windows)]
 use std::path::{Path, PathBuf};
 
+#[cfg(windows)]
 use crate::build;
+#[cfg(windows)]
 use crate::toolchain;
+#[cfg(windows)]
 use crate::ui;
 
 /// Toolchain subcommand operations

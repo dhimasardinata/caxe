@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `cargo test --all-targets --verbose`
 - Added targeted regression coverage for framework metadata/mutation behavior and target deferred messaging/help surface
 - Included dependency and workflow updates already present in `HEAD` (cargo deps + GitHub Actions deps bumps)
+- Fixed pure C builds to use the detected C compiler instead of the C++ driver
+- Hardened self-upgrade path resolution and cleaned Unix clippy warnings in release-gated paths
 
 ## [0.3.8] - Defects-First Stabilization & Governance 🛠️
 

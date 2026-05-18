@@ -118,7 +118,12 @@ pub fn get_toolchain(config: &CxConfig, _has_cpp: bool) -> Result<Toolchain, Too
 pub fn get_compiler(config: &CxConfig, has_cpp: bool) -> String {
     // Try new toolchain detection first
     if let Ok(tc) = get_toolchain(config, has_cpp) {
-        return tc.cxx_path.to_string_lossy().to_string();
+        let compiler = if has_cpp {
+            tc.get_cxx_compiler()
+        } else {
+            tc.get_cc_compiler()
+        };
+        return compiler.to_string_lossy().to_string();
     }
 
     // Fallback to old PATH-based detection (backward compatibility)

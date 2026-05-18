@@ -18,7 +18,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{Read, copy};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -66,6 +66,7 @@ pub fn verify_sha256(path: &Path, expected_hash: Option<&str>) -> Result<bool> {
 }
 
 /// Known library configurations for prebuilt binary downloads
+#[cfg(windows)]
 struct PrebuiltConfig {
     /// GitHub release asset pattern (rust format string with {version})
     asset_pattern: &'static str,
@@ -76,6 +77,7 @@ struct PrebuiltConfig {
 }
 
 /// Get prebuilt config for known libraries
+#[cfg(windows)]
 fn get_prebuilt_config(name: &str) -> Option<PrebuiltConfig> {
     match name.to_lowercase().as_str() {
         "glfw" => Some(PrebuiltConfig {
@@ -95,6 +97,7 @@ fn get_prebuilt_config(name: &str) -> Option<PrebuiltConfig> {
 
 /// Detect MSVC version from compiler path to select compatible prebuilt lib
 /// Returns the lib folder suffix (e.g., "lib-vc2022", "lib-vc2019")
+#[cfg(windows)]
 fn detect_msvc_lib_folder() -> Option<&'static str> {
     // Try to detect MSVC version from environment or vswhere
     // MSVC version mapping:
@@ -159,157 +162,162 @@ fn try_download_prebuilt(
     // Only works on Windows for now
     #[cfg(not(windows))]
     {
-        return Ok(false);
+        let _ = (name, url, tag, lib_path, output_file);
+        Ok(false)
     }
 
-    // Need a tag/version to find the right release
-    let version = match tag {
-        Some(t) => t.trim_start_matches('v').trim_start_matches("release-"),
-        None => return Ok(false),
-    };
+    #[cfg(windows)]
+    {
+        // Need a tag/version to find the right release
+        let version = match tag {
+            Some(t) => t.trim_start_matches('v').trim_start_matches("release-"),
+            None => return Ok(false),
+        };
 
-    // Get prebuilt config for this library
-    let config = match get_prebuilt_config(name) {
-        Some(c) => c,
-        None => return Ok(false),
-    };
+        // Get prebuilt config for this library
+        let config = match get_prebuilt_config(name) {
+            Some(c) => c,
+            None => return Ok(false),
+        };
 
-    // Parse GitHub owner/repo from URL
-    let (owner, repo) = match parse_github_url(url) {
-        Some(pair) => pair,
-        None => return Ok(false),
-    };
+        // Parse GitHub owner/repo from URL
+        let (owner, repo) = match parse_github_url(url) {
+            Some(pair) => pair,
+            None => return Ok(false),
+        };
 
-    // Build release URL
-    let asset_name = config.asset_pattern.replace("{version}", version);
-    let download_url = format!(
-        "https://github.com/{}/{}/releases/download/{}/{}",
-        owner,
-        repo,
-        tag.unwrap_or(version),
-        asset_name
-    );
+        // Build release URL
+        let asset_name = config.asset_pattern.replace("{version}", version);
+        let download_url = format!(
+            "https://github.com/{}/{}/releases/download/{}/{}",
+            owner,
+            repo,
+            tag.unwrap_or(version),
+            asset_name
+        );
 
-    // Check if output already exists
-    let expected_output = lib_path.join(output_file);
-    if expected_output.exists() {
-        return Ok(true);
-    }
+        // Check if output already exists
+        let expected_output = lib_path.join(output_file);
+        if expected_output.exists() {
+            return Ok(true);
+        }
 
-    println!("   {} Checking for prebuilt {}...", "⚡".cyan(), name);
+        println!("   {} Checking for prebuilt {}...", "⚡".cyan(), name);
 
-    // Try to download
-    let agent = ureq::agent();
-    let response = match agent.get(&download_url).call() {
-        Ok(r) => r,
-        Err(_) => {
-            // No prebuilt available, fall back to source build
+        // Try to download
+        let agent = ureq::agent();
+        let response = match agent.get(&download_url).call() {
+            Ok(r) => r,
+            Err(_) => {
+                // No prebuilt available, fall back to source build
+                return Ok(false);
+            }
+        };
+
+        if response.status() != 200 {
             return Ok(false);
         }
-    };
 
-    if response.status() != 200 {
-        return Ok(false);
-    }
+        println!(
+            "   {} Downloading prebuilt {} (faster!)...",
+            "📦".blue(),
+            name
+        );
 
-    println!(
-        "   {} Downloading prebuilt {} (faster!)...",
-        "📦".blue(),
-        name
-    );
+        // Download to temp file
+        let temp_zip = lib_path.join("_prebuilt.zip");
+        let mut file = fs::File::create(&temp_zip)?;
+        let body = response.into_body();
+        let mut reader = body.into_reader();
+        std::io::copy(&mut reader, &mut file)?;
+        drop(file);
 
-    // Download to temp file
-    let temp_zip = lib_path.join("_prebuilt.zip");
-    let mut file = fs::File::create(&temp_zip)?;
-    let body = response.into_body();
-    let mut reader = body.into_reader();
-    copy(&mut reader, &mut file)?;
-    drop(file);
+        // Extract zip
+        let zip_file = fs::File::open(&temp_zip)?;
+        let mut archive = zip::ZipArchive::new(zip_file)?;
 
-    // Extract zip
-    let zip_file = fs::File::open(&temp_zip)?;
-    let mut archive = zip::ZipArchive::new(zip_file)?;
+        // Extract lib file - search by suffix since path format may vary
+        let lib_suffix = config
+            .lib_path
+            .replace("{version}", version)
+            .split('/')
+            .next_back()
+            .unwrap_or("glfw3.lib")
+            .to_string();
 
-    // Extract lib file - search by suffix since path format may vary
-    let lib_suffix = config
-        .lib_path
-        .replace("{version}", version)
-        .split('/')
-        .next_back()
-        .unwrap_or("glfw3.lib")
-        .to_string();
+        // Detect MSVC version for CRT-compatible lib selection
+        let msvc_lib_folder = detect_msvc_lib_folder();
 
-    // Detect MSVC version for CRT-compatible lib selection
-    let msvc_lib_folder = detect_msvc_lib_folder();
+        let mut lib_found = false;
+        for i in 0..archive.len() {
+            if let Ok(mut entry) = archive.by_index(i) {
+                let entry_name = entry.name().to_string();
 
-    let mut lib_found = false;
-    for i in 0..archive.len() {
-        if let Ok(mut entry) = archive.by_index(i) {
-            let entry_name = entry.name().to_string();
-
-            // Check if this is the target lib file
-            if !entry_name.ends_with(&lib_suffix) || entry_name.contains("_mt.") {
-                continue;
-            }
-
-            // Only use prebuilt if we detected a compatible MSVC version
-            // None means VS 2022+ which has CRT mismatch issues
-            let is_preferred = if let Some(lib_folder) = msvc_lib_folder {
-                entry_name.contains(lib_folder)
-            } else {
-                // No compatible lib folder detected, skip prebuilt
-                false
-            };
-
-            if is_preferred {
-                let out_path = lib_path.join(output_file);
-                if let Some(parent) = out_path.parent() {
-                    fs::create_dir_all(parent)?;
+                // Check if this is the target lib file
+                if !entry_name.ends_with(&lib_suffix) || entry_name.contains("_mt.") {
+                    continue;
                 }
-                let mut out_file = fs::File::create(&out_path)?;
-                std::io::copy(&mut entry, &mut out_file)?;
-                lib_found = true;
-                break;
+
+                // Only use prebuilt if we detected a compatible MSVC version
+                // None means VS 2022+ which has CRT mismatch issues
+                let is_preferred = if let Some(lib_folder) = msvc_lib_folder {
+                    entry_name.contains(lib_folder)
+                } else {
+                    // No compatible lib folder detected, skip prebuilt
+                    false
+                };
+
+                if is_preferred {
+                    let out_path = lib_path.join(output_file);
+                    if let Some(parent) = out_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let mut out_file = fs::File::create(&out_path)?;
+                    std::io::copy(&mut entry, &mut out_file)?;
+                    lib_found = true;
+                    break;
+                }
             }
         }
-    }
 
-    if !lib_found {
-        // Cleanup and fallback to source build
+        if !lib_found {
+            // Cleanup and fallback to source build
+            let _ = fs::remove_file(&temp_zip);
+            return Ok(false);
+        }
+
+        // Extract includes
+        let include_prefix = config.include_path.replace("{version}", version);
+        for i in 0..archive.len() {
+            if let Ok(mut entry) = archive.by_index(i) {
+                let entry_name = entry.name().to_string();
+                if entry_name.starts_with(&include_prefix) && !entry.is_dir() {
+                    let relative = entry_name
+                        .strip_prefix(&include_prefix)
+                        .unwrap_or(&entry_name);
+                    let out_path = lib_path
+                        .join("include")
+                        .join(relative.trim_start_matches('/'));
+                    if let Some(parent) = out_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    let mut out_file = fs::File::create(&out_path)?;
+                    std::io::copy(&mut entry, &mut out_file)?;
+                }
+            }
+        }
+
+        // Cleanup
         let _ = fs::remove_file(&temp_zip);
-        return Ok(false);
+
+        println!("   {} Prebuilt {} ready!", "✓".green(), name);
+
+        Ok(true)
     }
-
-    // Extract includes
-    let include_prefix = config.include_path.replace("{version}", version);
-    for i in 0..archive.len() {
-        if let Ok(mut entry) = archive.by_index(i) {
-            let entry_name = entry.name().to_string();
-            if entry_name.starts_with(&include_prefix) && !entry.is_dir() {
-                let relative = entry_name
-                    .strip_prefix(&include_prefix)
-                    .unwrap_or(&entry_name);
-                let out_path = lib_path
-                    .join("include")
-                    .join(relative.trim_start_matches('/'));
-                if let Some(parent) = out_path.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let mut out_file = fs::File::create(&out_path)?;
-                std::io::copy(&mut entry, &mut out_file)?;
-            }
-        }
-    }
-
-    // Cleanup
-    let _ = fs::remove_file(&temp_zip);
-
-    println!("   {} Prebuilt {} ready!", "✓".green(), name);
-
-    Ok(true)
 }
 
 /// Parse GitHub URL to get owner/repo
+#[cfg(windows)]
 fn parse_github_url(url: &str) -> Option<(String, String)> {
     // Handle: https://github.com/owner/repo.git
     let url = url.trim_end_matches(".git");
